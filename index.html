@@ -1,0 +1,1054 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="default"/>
+<meta name="theme-color" content="#0f766e"/>
+<link rel="manifest" href="manifest.json"/>
+<link rel="icon" href="icon.svg" type="image/svg+xml"/>
+<link rel="apple-touch-icon" href="icon-512.png"/>
+<meta name="format-detection" content="telephone=no"/>
+<title>Audit Cuisine</title>
+<style>
+  :root{
+    --brand:#0f766e; --brand-dark:#115e59; --brand-soft:#ccfbf1;
+    --bg:#eef2f6; --card:#ffffff; --ink:#0f172a; --muted:#64748b; --line:#e2e8f0;
+    --ok:#16a34a; --bad:#dc2626; --warn:#b45309;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{margin:0; padding:0;}
+  body{
+    background:var(--bg); color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+    font-size:16px; line-height:1.45;
+  }
+  button{font-family:inherit; touch-action:manipulation; cursor:pointer;}
+  .wrap{max-width:640px; margin:0 auto; padding:0 14px calc(90px + env(safe-area-inset-bottom));}
+  .hide{display:none !important;}
+
+  /* ---------- Barre du haut ---------- */
+  .topbar{
+    position:sticky; top:0; z-index:30; background:rgba(255,255,255,.92);
+    backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
+    border-bottom:1px solid var(--line);
+    padding:calc(10px + env(safe-area-inset-top)) 14px 10px;
+  }
+  .tb-in{max-width:640px; margin:0 auto; display:flex; align-items:center; gap:10px;}
+  .tb-back{border:none; background:var(--brand-soft); color:var(--brand-dark); width:38px; height:38px;
+    border-radius:12px; font-size:19px; flex:none;}
+  .tb-title{flex:1; min-width:0;}
+  .tb-title b{display:block; font-size:16px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  .tb-title small{color:var(--muted); font-size:12.5px;}
+  .scorechip{color:#fff; font-weight:700; font-size:14px; padding:5px 11px; border-radius:999px; background:#94a3b8; flex:none;}
+  .progress{height:5px; background:var(--line); border-radius:99px; overflow:hidden; margin-top:8px; max-width:640px; margin-left:auto; margin-right:auto;}
+  .progress i{display:block; height:100%; width:0%; background:var(--brand); border-radius:99px; transition:width .25s;}
+  .savestate{font-size:11px; color:var(--muted); text-align:right; margin-top:4px; max-width:640px; margin-left:auto; margin-right:auto;}
+
+  /* ---------- Chips de sections ---------- */
+  .chips{display:flex; gap:8px; overflow-x:auto; padding:10px 14px; -webkit-overflow-scrolling:touch;
+    scrollbar-width:none; position:sticky; top:calc(64px + env(safe-area-inset-top)); z-index:25;
+    background:linear-gradient(var(--bg) 82%, transparent);}
+  .chips::-webkit-scrollbar{display:none;}
+  .chip{flex:none; display:flex; align-items:center; gap:6px; border:1.5px solid var(--line); background:#fff;
+    border-radius:999px; padding:7px 12px; font-size:13px; font-weight:600; color:#334155;}
+  .chip .cnt{font-weight:700; color:var(--muted); font-size:11.5px; background:var(--bg); border-radius:99px; padding:2px 7px;}
+  .chip.active{background:var(--brand); border-color:var(--brand); color:#fff;}
+  .chip.active .cnt{background:rgba(255,255,255,.25); color:#fff;}
+  .chip.done{border-color:var(--ok);}
+  .chip.done .cnt{background:#dcfce7; color:#166534;}
+
+  /* ---------- Cartes de questions ---------- */
+  .sec-head{display:flex; align-items:center; gap:10px; margin:16px 2px 4px;}
+  .sec-head h2{font-size:18px; margin:0; flex:1; line-height:1.3;}
+  .sec-head .scorechip{font-size:13px;}
+  .sec-bar{height:5px; background:var(--line); border-radius:99px; overflow:hidden; margin:6px 2px 2px;}
+  .sec-bar i{display:block; height:100%; width:0%; background:var(--brand); transition:width .25s;}
+  .sec-warn{color:var(--warn); font-size:13px; font-weight:600; margin:8px 2px 0;}
+  .group-label{margin:18px 2px 8px; padding:8px 12px; background:#e0f2fe; color:#075985;
+    border-radius:10px; font-size:13.5px; font-weight:700;}
+  .qcard{background:var(--card); border-radius:16px; padding:14px; margin:10px 0; box-shadow:0 1px 3px rgba(15,23,42,.07);}
+  .qtop{display:flex; gap:10px; margin-bottom:11px;}
+  .qnum{flex:none; width:26px; height:26px; border-radius:9px; background:var(--brand-soft); color:var(--brand-dark);
+    font-size:13px; font-weight:800; display:flex; align-items:center; justify-content:center; margin-top:1px;}
+  .qtext{font-size:15px; font-weight:600; line-height:1.4;}
+  .qwarn{display:block; margin-top:6px; color:var(--warn); font-size:12.5px; font-weight:500;}
+  .seg{display:grid; grid-template-columns:repeat(3,1fr); gap:8px;}
+  .seg .b{border:1.5px solid var(--line); background:#f8fafc; border-radius:12px; padding:10px 4px;
+    font-size:14.5px; font-weight:700; color:#475569; display:flex; align-items:center; justify-content:center; gap:7px; min-height:46px;}
+  .seg .b span{font-size:14.5px;}
+  .b-oui.sel{background:#dcfce7; border-color:var(--ok); color:#166534;}
+  .b-non.sel{background:#fee2e2; border-color:var(--bad); color:#991b1b;}
+  .b-na.sel{background:#e2e8f0; border-color:#94a3b8; color:#334155;}
+  .note{width:100%; min-height:64px; margin-top:10px; border:1.5px solid var(--line); border-radius:12px;
+    padding:9px 11px; font-size:16px; font-family:inherit; resize:vertical; background:#fffbeb;}
+  .phrow{display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; align-items:center;}
+  .phwrap{position:relative; display:inline-block;}
+  .ph{width:62px; height:62px; object-fit:cover; border-radius:10px; border:1px solid var(--line); display:block;}
+  .phdel{position:absolute; top:-7px; right:-7px; width:22px; height:22px; border-radius:99px; border:none;
+    background:#0f172a; color:#fff; font-size:13px; line-height:1; display:flex; align-items:center; justify-content:center;}
+  .addph{border:1.5px dashed #94a3b8; background:#f8fafc; color:#475569; border-radius:10px;
+    padding:9px 13px; font-size:13.5px; font-weight:600;}
+
+  /* ---------- Pied de navigation ---------- */
+  .footerbar{position:fixed; bottom:0; left:0; right:0; z-index:30; background:rgba(255,255,255,.95);
+    backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); border-top:1px solid var(--line);
+    padding:10px 14px calc(10px + env(safe-area-inset-bottom));}
+  .fb-in{max-width:640px; margin:0 auto; display:flex; gap:10px;}
+  .fbtn{flex:1; border:none; border-radius:13px; padding:13px 8px; font-size:14.5px; font-weight:700;
+    display:flex; flex-direction:column; align-items:center; gap:2px; min-height:52px; justify-content:center;}
+  .fbtn small{font-size:11px; font-weight:600; opacity:.75; max-width:100%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  .fbtn.ghost{background:#f1f5f9; color:#334155;}
+  .fbtn.primary{background:var(--brand); color:#fff;}
+
+  /* ---------- Accueil ---------- */
+  .home-head{padding:26px 2px 8px;}
+  .home-head h1{margin:0; font-size:24px;}
+  .home-head p{margin:6px 0 0; color:var(--muted); font-size:14px;}
+  .btn{display:inline-flex; align-items:center; justify-content:center; gap:8px; border:none; border-radius:13px;
+    padding:13px 18px; font-size:15px; font-weight:700; min-height:48px;}
+  .btn.primary{background:var(--brand); color:#fff;}
+  .btn.ghost{background:#fff; color:#334155; border:1.5px solid var(--line);}
+  .btn.danger{background:#fee2e2; color:#991b1b;}
+  .btn.block{width:100%;}
+  .card{background:var(--card); border-radius:16px; padding:14px; margin:10px 0; box-shadow:0 1px 3px rgba(15,23,42,.07);}
+  .card-head{display:flex; align-items:flex-start; gap:10px; cursor:pointer;}
+  .card-title{font-size:16.5px; font-weight:800; margin:0;}
+  .meta{color:var(--muted); font-size:12.5px; margin-top:3px;}
+  .bar{height:6px; background:var(--line); border-radius:99px; overflow:hidden; margin-top:10px;}
+  .bar i{display:block; height:100%; border-radius:99px; background:var(--brand); transition:width .25s;}
+  .row-actions{display:flex; gap:7px; margin-top:12px; flex-wrap:wrap;}
+  .row-actions .btn{padding:9px 12px; font-size:13px; min-height:40px; border-radius:10px; flex:1;}
+  .empty{text-align:center; padding:40px 10px; color:var(--muted);}
+  .tip{font-size:12.5px; color:var(--muted); text-align:center; margin-top:18px; line-height:1.5;}
+  .tools{display:flex; gap:8px; margin-top:14px;}
+  .tools .btn{flex:1; font-size:12.5px; padding:10px 6px; min-height:42px;}
+
+  /* ---------- Rapport ---------- */
+  .rep-hero{background:var(--card); border-radius:18px; padding:20px; margin:16px 0 10px; text-align:center;
+    box-shadow:0 1px 3px rgba(15,23,42,.07);}
+  .gauge{position:relative; width:150px; height:150px; margin:6px auto 4px;}
+  .gauge svg{transform:rotate(-90deg);}
+  .gauge .gval{position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;}
+  .gauge .gval b{font-size:34px; line-height:1;}
+  .gauge .gval small{color:var(--muted); font-size:12px; margin-top:3px;}
+  .interp{display:inline-block; color:#fff; font-weight:800; font-size:15px; padding:7px 16px; border-radius:999px; margin-top:8px;}
+  .rep-meta{text-align:center; color:var(--muted); font-size:13px; margin:4px 0 14px;}
+  .secrow{background:var(--card); border-radius:13px; padding:11px 13px; margin:8px 0; box-shadow:0 1px 3px rgba(15,23,42,.07);}
+  .secrow .sr-top{display:flex; align-items:center; gap:8px;}
+  .secrow .sr-top b{flex:1; font-size:13.5px; line-height:1.35;}
+  .secrow .scorechip{font-size:12px; padding:3px 9px;}
+  .secrow .bar{margin-top:8px;}
+  .rep-actions{display:grid; grid-template-columns:1fr 1fr; gap:9px; margin:16px 0 6px;}
+  .nc-sec{margin-top:20px;}
+  .nc-sec h3{font-size:15.5px; margin:0 0 8px;}
+  .nc-item{background:var(--card); border-left:4px solid var(--bad); border-radius:12px; padding:11px 13px; margin:8px 0;
+    box-shadow:0 1px 3px rgba(15,23,42,.07); break-inside:avoid;}
+  .nc-item p{margin:0; font-size:14px; font-weight:600;}
+  .nc-note{margin:7px 0 0; font-size:13px; color:#7c2d12; background:#fffbeb; border-radius:8px; padding:7px 9px;}
+  .nc-photos{display:flex; gap:8px; margin-top:9px; flex-wrap:wrap;}
+  .nc-photos img{width:74px; height:74px; object-fit:cover; border-radius:9px; border:1px solid var(--line);}
+  .rep-ok{color:var(--ok); font-weight:700; text-align:center; padding:18px 0 8px; font-size:15px;}
+  .legend{color:var(--muted); font-size:12px; text-align:center; margin-top:16px; line-height:1.5;}
+
+  /* ---------- Modale / visionneuse / toast ---------- */
+  .modal-bg{position:fixed; inset:0; background:rgba(15,23,42,.5); z-index:60; display:flex;
+    align-items:flex-end; justify-content:center; padding:0;}
+  @media (min-width:520px){ .modal-bg{align-items:center; padding:20px;} }
+  .sheet{background:#fff; width:100%; max-width:500px; border-radius:20px 20px 0 0; padding:20px;
+    max-height:88vh; overflow:auto;}
+  @media (min-width:520px){ .sheet{border-radius:20px;} }
+  .sheet h3{margin:0 0 14px; font-size:18px;}
+  .field{margin-bottom:12px;}
+  .field label{display:block; font-size:13px; font-weight:700; color:#334155; margin-bottom:5px;}
+  .field input{width:100%; border:1.5px solid var(--line); border-radius:11px; padding:11px 12px;
+    font-size:16px; font-family:inherit;}
+  .sheet .btn{width:100%; margin-top:6px;}
+  .viewer{position:fixed; inset:0; background:rgba(0,0,0,.93); z-index:80; display:flex;
+    flex-direction:column; align-items:center; justify-content:center; padding:16px;}
+  .viewer img{max-width:100%; max-height:78vh; border-radius:10px;}
+  .viewer-actions{display:flex; gap:10px; margin-top:14px;}
+  .toast{position:fixed; left:50%; transform:translateX(-50%); bottom:calc(90px + env(safe-area-inset-bottom));
+    background:#0f172a; color:#fff; padding:11px 18px; border-radius:999px; font-size:13.5px; font-weight:600;
+    z-index:99; opacity:0; pointer-events:none; transition:opacity .25s; max-width:86vw; text-align:center;}
+  .toast.show{opacity:.96;}
+
+  @media print{
+    .noprint{display:none !important;}
+    body{background:#fff;}
+    .wrap{max-width:none; padding:0;}
+    .rep-hero,.secrow,.nc-item{box-shadow:none; border:1px solid #e2e8f0;}
+  }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<input type="file" id="photoInput" accept="image/*" multiple class="hide"/>
+<input type="file" id="importInput" accept=".json,application/json" class="hide"/>
+<div id="overlay"></div>
+<div id="toast" class="toast"></div>
+
+<script>
+"use strict";
+
+/* =====================================================================
+   DONNÉES : les 13 sections de l'audit (issues du fichier Excel d'origine)
+   ===================================================================== */
+const SECTIONS = [
+  { icon:"🚚", title:"Contrôle et réception des livraisons", short:"Livraisons", questions:[
+    { t:"Le relevé des températures du camion est-il fait auprès du livreur ?" },
+    { t:"Est-ce qu'un cuisinier range rapidement les livraisons ?" },
+    { t:"Les thermomètres sont-ils en état de fonctionnement (sonde + laser) ?" },
+    { t:"Les produits sont-ils stockés correctement dans les chambres froides ? (aucun produit au sol)" },
+    { t:"Les produits sont-ils correctement protégés ? (pas de produit à l'air libre)" },
+    { t:"Les cartons en chambre froide positive sont-ils stockés sur l'étagère basse ?" },
+  ]},
+  { icon:"🧾", title:"Les auto-contrôles de cuisine", short:"Auto-contrôles", questions:[
+    { t:"L'équipe est-elle autonome sur Traqfood ?" },
+    { t:"Les remises en température sont-elles faites correctement ? (+63 °C en moins d'une heure)" },
+    { t:"Les descentes en température sont-elles faites correctement ? (en dessous de 10 °C en moins de 2 heures)" },
+    { t:"Les tests d'huiles sont-ils faits tous les jours ?" },
+    { t:"La filtration est-elle faite tous les jours ?" },
+    { t:"Le planning de nettoyage quotidien est-il suivi ?" },
+    { t:"La traçabilité est-elle faite correctement ? (les photos des produits sur Traqfood)" },
+    { t:"Est-ce qu'il y a bien un capteur de température dans chaque frigo ?" },
+    { t:"L'adoucisseur à sel est-il bien rempli ?" },
+    { t:"Les dévidoirs de sopalin sont-ils remplis ?" },
+    { t:"Les distributeurs de savon sont-ils bien remplis ?" },
+    { t:"Y a-t-il bien une brosse à ongles à chaque lave-mains ?" },
+    { t:"Y a-t-il bien un pulvérisateur de produit et une lavette propre à chaque poste ?" },
+    { t:"Y a-t-il un plan de lutte contre les nuisibles ? (aucune trace de rongeurs ou d'insectes)" },
+    { t:"Les produits d'entretien sont-ils stockés correctement ? (pas à proximité d'aliments)" },
+    { t:"Le plan d'action Eurofins est-il bien rempli et affiché ?" },
+    { t:"Le rapport Eurofins est-il bien affiché ?" },
+    { t:"Les déchets sont-ils stockés et gérés correctement ?" },
+  ]},
+  { icon:"🌡️", title:"Vérification des chambres froides et des réserves", short:"Réserves", questions:[
+    { t:"Vérification des DLC/DLUO effectuée" },
+    { t:"Y a-t-il des produits congelés sans autorisation ?", warn:true },
+  ]},
+  { icon:"❄️", title:"Chambre froide positive", short:"CF positive", questions:[
+    { t:"Le FIFO est-il fait correctement ?" },
+    { t:"Les produits sont-ils bien protégés et filmés ?" },
+    { t:"Les produits sont-ils bien datés ?" },
+    { t:"La chambre froide est-elle propre ?" },
+    { t:"La chambre froide est-elle rangée correctement ?" },
+  ]},
+  { icon:"🧊", title:"Chambre froide négative", short:"CF négative", questions:[
+    { t:"Le FIFO est-il fait correctement ?" },
+    { t:"Les produits sont-ils bien protégés et filmés ?" },
+    { t:"Les produits sont-ils bien datés ?" },
+    { t:"La chambre froide est-elle propre ?" },
+    { t:"La chambre froide est-elle rangée correctement ?" },
+  ]},
+  { icon:"🔥", title:"Le poste chaud", short:"Poste chaud", questions:[
+    { t:"Le FIFO est-il fait correctement ?" },
+    { t:"Les produits sont-ils bien protégés et filmés ?" },
+    { t:"Les produits sont-ils bien datés ?" },
+    { t:"Les frigos sont-ils propres ?" },
+    { t:"Les frigos sont-ils rangés ?" },
+  ]},
+  { icon:"🥗", title:"Le poste froid", short:"Poste froid", questions:[
+    { t:"Le FIFO est-il fait correctement ?" },
+    { t:"Les produits sont-ils bien protégés et filmés ?" },
+    { t:"Les produits sont-ils bien datés ?" },
+    { t:"Les frigos sont-ils propres ?" },
+    { t:"Les frigos sont-ils rangés ?" },
+  ]},
+  { icon:"🍰", title:"Le poste des desserts", short:"Desserts", questions:[
+    { t:"Le FIFO est-il fait correctement ?" },
+    { t:"Les produits sont-ils bien protégés et filmés ?" },
+    { t:"Les produits sont-ils bien datés ?" },
+    { t:"Les frigos sont-ils propres ?" },
+    { t:"Les frigos sont-ils rangés ?" },
+  ]},
+  { icon:"🥫", title:"L'épicerie", short:"Épicerie", questions:[
+    { t:"Le FIFO est-il fait correctement ?" },
+    { t:"Les produits sont-ils bien protégés et filmés ?" },
+    { t:"Les produits sont-ils bien datés ?" },
+    { t:"Les étagères sont-elles propres ?" },
+    { t:"Les étagères sont-elles bien rangées ?" },
+  ]},
+  { icon:"👕", title:"Le respect des règles HACCP par l'équipe", short:"HACCP équipe", questions:[
+    { t:"Les cuisiniers ont-ils une tenue propre et complète ?" },
+    { t:"Les cuisiniers ont-ils retiré ou protégé leurs bijoux ? (hors alliance qui est tolérée)" },
+    { t:"En cas de blessure, les cuisiniers ont-ils bien protégé leur plaie ?" },
+    { t:"Le minuteur pour le lavage des mains est-il en place et utilisé ?" },
+    { t:"Les cuisiniers se lavent-ils les mains toutes les 30 minutes ?" },
+    { t:"Les tabliers et torchons propres et sales sont-ils séparés et rangés correctement ?" },
+    { t:"Y a-t-il des « kits visiteurs » disponibles ?" },
+    { t:"L'armoire à pharmacie est-elle complète ?" },
+    { t:"Les vestiaires sont-ils propres ?" },
+    { t:"Les toilettes des vestiaires sont-elles propres ?" },
+    { t:"Les consommables des toilettes sont-ils remplis ?" },
+    { t:"Toutes les tenues et les chaussures sont-elles rangées dans les casiers ?" },
+  ]},
+  { icon:"🧽", title:"Propreté et entretien du matériel et de la cuisine", short:"Propreté matériel", questions:[
+    { t:"Le matériel fonctionne-t-il correctement ?" },
+    { t:"Les poubelles en cuisine sont-elles propres et en bon état ? (pédale + couvercle)" },
+    { t:"Les grilles anti-moustiques sont-elles allumées ?" },
+    { t:"Le petit matériel de cuisine et la vaisselle sont-ils propres ? (assiette / bac gastro / pince / etc.)" },
+    { t:"Le petit matériel de plonge et de stockage sont-ils propres ? (panier à plonge / bac à couverts / saladette / etc.)" },
+    { t:"Clamshell + Clamshell 2 bras (drive)", group:"Les matériels suivants sont-ils propres ?" },
+    { t:"Lèche-frite" },
+    { t:"Friteuse" },
+    { t:"La plancha" },
+    { t:"Duke" },
+    { t:"Toasteur à pain" },
+    { t:"Bain-marie" },
+    { t:"Chauffe-fromage" },
+    { t:"Four mixte (sec / vapeur)" },
+    { t:"Four rapido" },
+    { t:"Micro-ondes" },
+    { t:"Plonge à capot" },
+    { t:"Petite plonge" },
+    { t:"Évier" },
+    { t:"Le matériel de la zone laverie est-il propre ?" },
+    { t:"Les murs de la cuisine sont-ils propres ?" },
+    { t:"Les hottes et les filtres sont-ils propres ?" },
+    { t:"Les étagères et les plans de travail sont-ils propres ?" },
+  ]},
+  { icon:"🍽️", title:"L'organisation et le déroulé du service", short:"Service", questions:[
+    { t:"Y a-t-il un briefing ?" },
+    { t:"Les cuisiniers connaissent-ils leurs fiches techniques ?" },
+    { t:"Y a-t-il une bonne communication entre le poste chaud et celui du froid pendant le service ?" },
+    { t:"Les cuisiniers savent-ils changer de poste pendant le service pour aider leurs collègues ?" },
+    { t:"Les plats sont-ils conformes aux bons de commande ?" },
+    { t:"La production / l'exécution des plats est-elle rapide ?" },
+    { t:"Les plats sont-ils de qualité ? (présentation / chaleur)" },
+    { t:"Les fiches techniques sont-elles respectées ?" },
+    { t:"Les produits sont-ils ceux référencés par l'enseigne ?" },
+    { t:"Les frites sont-elles salées correctement ?" },
+    { t:"Les responsables font-ils le contrôle des plats envoyés par leurs équipes ?" },
+    { t:"Les responsables sont-ils attentifs à la propreté des postes de travail et à l'organisation pendant le service ?" },
+    { t:"Les cuisiniers anticipent-ils les bons à suivre ?" },
+    { t:"Les quantités des starters dans le duke sont-elles gérées correctement ? (qualité / quantité / pas de perte)" },
+    { t:"Les produits fragiles sont-ils rangés dès que possible ?" },
+    { t:"Les cuisiniers sont-ils attentifs à la propreté de leur poste avant de partir ?" },
+    { t:"La mise en place est-elle refaite à chaque fin de service ?" },
+    { t:"Bonne ambiance pendant le service ?" },
+    { t:"Les responsables de cuisine font-ils bien le contrôle des postes avant de laisser partir leurs équipes ?" },
+  ]},
+];
+// Identifiants stables
+SECTIONS.forEach((s, i) => s.questions.forEach((q, j) => { q.id = "s" + (i+1) + "q" + (j+1); }));
+const TOTAL_Q = SECTIONS.reduce((a, s) => a + s.questions.length, 0);
+
+/* =====================================================================
+   STOCKAGE (IndexedDB, sauvegarde automatique)
+   ===================================================================== */
+let db = null;
+function openDB(){
+  return new Promise((resolve) => {
+    try{
+      const req = indexedDB.open("audit-cuisine-db", 1);
+      req.onupgradeneeded = () => { req.result.createObjectStore("audits", { keyPath:"id" }); };
+      req.onsuccess = () => { db = req.result; resolve(true); };
+      req.onerror = () => resolve(false);
+    }catch(e){ resolve(false); }
+  });
+}
+function dbPut(rec){ return new Promise((res, rej) => { const tx = db.transaction("audits","readwrite"); tx.objectStore("audits").put(rec); tx.oncomplete = res; tx.onerror = () => rej(tx.error); }); }
+function dbAll(){ return new Promise((res, rej) => { const tx = db.transaction("audits","readonly"); const r = tx.objectStore("audits").getAll(); tx.oncomplete = () => res(r.result || []); tx.onerror = () => rej(tx.error); }); }
+function dbGet(id){ return new Promise((res, rej) => { const tx = db.transaction("audits","readonly"); const r = tx.objectStore("audits").get(id); tx.oncomplete = () => res(r.result); tx.onerror = () => rej(tx.error); }); }
+function dbDel(id){ return new Promise((res, rej) => { const tx = db.transaction("audits","readwrite"); tx.objectStore("audits").delete(id); tx.oncomplete = res; tx.onerror = () => rej(tx.error); }); }
+
+/* =====================================================================
+   ÉTAT
+   ===================================================================== */
+const state = { view:"list", auditId:null, sec:0, autoJump:true, photoQid:null, viewer:null };
+let current = null;         // audit en cours d'édition
+let cache = [];             // liste des audits
+let saveTimer = null;
+
+function setSaveStatus(st){
+  const el = document.getElementById("saveState");
+  if(!el) return;
+  if(st === "saving"){ el.textContent = "Enregistrement…"; }
+  else if(st === "saved"){ el.textContent = "✓ Enregistré"; }
+  else if(st === "error"){ el.textContent = "⚠ Erreur de sauvegarde"; }
+}
+function scheduleSave(){
+  if(!current) return;
+  current.updatedAt = Date.now();
+  setSaveStatus("saving");
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(async () => {
+    try{ if(db){ await dbPut(current); setSaveStatus("saved"); } }
+    catch(e){ console.error(e); setSaveStatus("error"); }
+  }, 300);
+}
+
+/* =====================================================================
+   CALCULS (mêmes règles que le fichier Excel : moyenne des % par section)
+   ===================================================================== */
+function sectionStats(sec, audit){
+  let oui = 0, non = 0, na = 0;
+  for(const q of sec.questions){
+    const a = audit.answers[q.id];
+    if(a === "oui") oui++; else if(a === "non") non++; else if(a === "na") na++;
+  }
+  const answered = oui + non;
+  const done = answered + na;
+  const score = answered ? (oui / answered) * 100 : null;
+  const pct = (done / sec.questions.length) * 100;
+  return { oui, non, na, total:sec.questions.length, answered, done, score, pct };
+}
+function globalStats(audit){
+  const parts = SECTIONS.map(s => sectionStats(s, audit));
+  const scores = parts.filter(p => p.score !== null).map(p => p.score);
+  const score = scores.length ? scores.reduce((a,b) => a+b, 0) / scores.length : null;
+  const done = parts.reduce((a,p) => a + p.done, 0);
+  return { parts, score, pct:(done / TOTAL_Q) * 100, done };
+}
+function interp(score){
+  if(score === null) return { label:"—", color:"#94a3b8" };
+  if(score >= 95) return { label:"Excellent", color:"#15803d" };
+  if(score >= 90) return { label:"Très bien", color:"#4d7c0f" };
+  if(score >= 80) return { label:"Conforme", color:"#0369a1" };
+  if(score >= 70) return { label:"À améliorer", color:"#b45309" };
+  if(score >= 60) return { label:"Insuffisant", color:"#b91c1c" };
+  return { label:"Audit à refaire d'urgence", color:"#7f1d1d" };
+}
+
+/* =====================================================================
+   OUTILS
+   ===================================================================== */
+function esc(s){ return String(s == null ? "" : s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+function fmtDate(iso){
+  if(!iso) return "";
+  const d = new Date(iso + "T12:00:00");
+  return isNaN(d) ? iso : d.toLocaleDateString("fr-FR", { day:"numeric", month:"long", year:"numeric" });
+}
+function toast(msg){
+  const t = document.getElementById("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  clearTimeout(t._tm);
+  t._tm = setTimeout(() => t.classList.remove("show"), 2200);
+}
+function newId(){ return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
+function todayISO(){ const d = new Date(); return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0"); }
+
+/* =====================================================================
+   PHOTOS : compression locale puis stockage
+   ===================================================================== */
+function compressImage(img, maxDim, quality){
+  const scale = Math.min(1, maxDim / Math.max(img.naturalWidth, img.naturalHeight));
+  const c = document.createElement("canvas");
+  c.width = Math.max(1, Math.round(img.naturalWidth * scale));
+  c.height = Math.max(1, Math.round(img.naturalHeight * scale));
+  c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+  return c.toDataURL("image/jpeg", quality);
+}
+function addPhotos(qid, files){
+  if(!current) return;
+  let pending = files.length;
+  toast("Ajout de " + files.length + " photo" + (files.length > 1 ? "s" : "") + "…");
+  for(const f of files){
+    if(!f.type.startsWith("image/")){ pending--; continue; }
+    const url = URL.createObjectURL(f);
+    const img = new Image();
+    img.onload = () => {
+      try{
+        const data = compressImage(img, 1280, 0.72);
+        (current.photos[qid] = current.photos[qid] || []).push(data);
+      }catch(e){ console.error(e); toast("Impossible de traiter une photo"); }
+      URL.revokeObjectURL(url);
+      pending--;
+      if(pending === 0){ scheduleSave(); renderPhotoRow(qid); toast("Photo(s) ajoutée(s) ✓"); }
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); pending--; if(pending === 0){ scheduleSave(); renderPhotoRow(qid); } };
+    img.src = url;
+  }
+}
+function renderPhotoRow(qid){
+  const el = document.getElementById("ph-" + qid);
+  if(!el || !current) return;
+  const photos = current.photos[qid] || [];
+  el.innerHTML = photos.map((p, i) =>
+    `<span class="phwrap">
+       <img class="ph" src="${p}" data-action="view-photo" data-qid="${qid}" data-i="${i}" alt="photo">
+       <button class="phdel" data-action="del-photo" data-qid="${qid}" data-i="${i}" aria-label="Supprimer">×</button>
+     </span>`).join("") +
+    `<button class="addph" data-action="add-photo" data-qid="${qid}">📷 Photo</button>`;
+}
+
+/* =====================================================================
+   VUES
+   ===================================================================== */
+const app = document.getElementById("app");
+
+function render(){
+  if(state.view === "list") renderList();
+  else if(state.view === "audit") renderAudit();
+  else if(state.view === "report") renderReport();
+}
+
+/* ---------- Accueil : liste des audits ---------- */
+function renderList(){
+  current = null;
+  cache.sort((a,b) => (b.updatedAt||0) - (a.updatedAt||0));
+  let html = `
+  <div class="topbar noprint"><div class="tb-in">
+    <div class="tb-title"><b>🧑‍🍳 Audit Cuisine</b><small>HACCP · auto-évaluation restaurant</small></div>
+  </div></div>
+  <div class="wrap">
+    <div class="home-head">
+      <h1>Mes audits</h1>
+      <p>${cache.length} audit${cache.length > 1 ? "s" : ""} enregistré${cache.length > 1 ? "s" : ""} sur cet appareil · ${TOTAL_Q} questions réparties en ${SECTIONS.length} sections</p>
+    </div>
+    <button class="btn primary block" data-action="new-audit">＋&nbsp; Nouvel audit</button>`;
+  if(cache.length === 0){
+    html += `<div class="empty">Aucun audit pour l'instant.<br>Creez votre premier audit : il sera sauvegardé automatiquement sur l'appareil.</div>`;
+  }
+  for(const a of cache){
+    const gs = globalStats(a);
+    const ic = interp(gs.score);
+    html += `
+    <div class="card">
+      <div class="card-head" data-action="open-audit" data-id="${a.id}">
+        <div style="flex:1; min-width:0;">
+          <p class="card-title">${esc(a.restaurant || "Audit sans nom")}</p>
+          <div class="meta">${fmtDate(a.date)} · ${gs.done}/${TOTAL_Q} répondues</div>
+          <div class="bar"><i style="width:${gs.pct}%; background:${ic.color};"></i></div>
+        </div>
+        <span class="scorechip" style="background:${ic.color};">${gs.score === null ? "—" : Math.round(gs.score) + "%"}</span>
+      </div>
+      <div class="row-actions">
+        <button class="btn ghost" data-action="open-audit" data-id="${a.id}">${gs.done < TOTAL_Q ? "✏️ Continuer" : "📂 Ouvrir"}</button>
+        <button class="btn ghost" data-action="open-report" data-id="${a.id}">📊 Rapport</button>
+        <button class="btn ghost" data-action="dup-audit" data-id="${a.id}">⧉ Dupliquer</button>
+        <button class="btn danger" data-action="del-audit" data-id="${a.id}">🗑</button>
+      </div>
+    </div>`;
+  }
+  html += `
+    <div class="tools">
+      <button class="btn ghost" data-action="export-json">⬇️ Sauvegarde (fichier)</button>
+      <button class="btn ghost" data-action="import-json">⬆️ Importer</button>
+    </div>
+    <p class="tip">💡 Tout est enregistré automatiquement sur l'appareil, sans connexion internet.<br>
+    Sur iPhone/Android : menu du navigateur → « Ajouter à l'écran d'accueil » pour l'utiliser comme une application.</p>
+  </div>`;
+  app.innerHTML = html;
+  window.scrollTo(0, 0);
+}
+
+/* ---------- Écran audit : une section à la fois ---------- */
+function renderAudit(){
+  const audit = current;
+  if(!audit){ state.view = "list"; return render(); }
+  const sec = SECTIONS[state.sec];
+  const gs = globalStats(audit);
+  const st = sectionStats(sec, audit);
+  const gic = interp(gs.score);
+  const sic = st.score === null ? { color:"#94a3b8" } : interp(st.score);
+
+  let chips = "";
+  SECTIONS.forEach((s, i) => {
+    const sti = sectionStats(s, audit);
+    chips += `<button class="chip ${i === state.sec ? "active" : ""} ${sti.done === sti.total ? "done" : ""}" id="chip-${i}"
+      data-action="goto-section" data-i="${i}"><span>${s.icon}</span><span>${esc(s.short)}</span>
+      <span class="cnt">${sti.done}/${sti.total}</span></button>`;
+  });
+
+  let cards = "";
+  let num = 0;
+  for(const q of sec.questions){
+    num++;
+    const a = audit.answers[q.id] || "";
+    const noteVal = audit.notes[q.id] || "";
+    const photos = audit.photos[q.id] || [];
+    if(q.group) cards += `<div class="group-label">${esc(q.group)}</div>`;
+    cards += `
+    <div class="qcard" data-qid="${q.id}">
+      <div class="qtop">
+        <span class="qnum">${num}</span>
+        <div class="qtext">${esc(q.t)}${q.warn ? `<span class="qwarn">⚠️ Dans le fichier Excel d'origine, « Oui » rapporte un point ici. À confirmer si la logique doit être inversée (Non = conforme).</span>` : ""}</div>
+      </div>
+      <div class="seg">
+        <button class="b b-oui ${a === "oui" ? "sel" : ""}" data-action="answer" data-qid="${q.id}" data-v="oui">👍 <span>Oui</span></button>
+        <button class="b b-non ${a === "non" ? "sel" : ""}" data-action="answer" data-qid="${q.id}" data-v="non">👎 <span>Non</span></button>
+        <button class="b b-na ${a === "na" ? "sel" : ""}" data-action="answer" data-qid="${q.id}" data-v="na"><span>N/A</span></button>
+      </div>
+      <textarea class="note ${a === "non" || noteVal ? "" : "hide"}" data-qid="${q.id}"
+        placeholder="Commentaire / action corrective…">${esc(noteVal)}</textarea>
+      <div class="phrow" id="ph-${q.id}">
+        ${photos.map((p, i) => `
+          <span class="phwrap">
+            <img class="ph" src="${p}" data-action="view-photo" data-qid="${q.id}" data-i="${i}" alt="photo">
+            <button class="phdel" data-action="del-photo" data-qid="${q.id}" data-i="${i}" aria-label="Supprimer">×</button>
+          </span>`).join("")}
+        <button class="addph" data-action="add-photo" data-qid="${q.id}">📷 Photo</button>
+      </div>
+    </div>`;
+  }
+
+  const prev = state.sec > 0 ? SECTIONS[state.sec - 1] : null;
+  const next = state.sec < SECTIONS.length - 1 ? SECTIONS[state.sec + 1] : null;
+
+  app.innerHTML = `
+  <div class="topbar noprint">
+    <div class="tb-in">
+      <button class="tb-back" data-action="back-home">←</button>
+      <div class="tb-title" data-action="edit-info" style="cursor:pointer;">
+        <b>${esc(audit.restaurant || "Audit")}</b>
+        <small>${fmtDate(audit.date)} · ${esc(audit.auditor || "")} ${audit.auditor ? "·" : ""} <u>modifier</u></small>
+      </div>
+      <span class="scorechip" id="hScore" style="background:${gic.color};">${gs.score === null ? "—" : Math.round(gs.score) + "%"}</span>
+      <button class="tb-back" data-action="open-report-current" title="Voir le rapport">📊</button>
+    </div>
+    <div class="progress"><i id="hBar" style="width:${gs.pct}%;"></i></div>
+    <div class="savestate" id="saveState">✓ Enregistré</div>
+  </div>
+  <div class="chips noprint">${chips}</div>
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>${sec.icon} ${esc(sec.title)}</h2>
+      <span class="scorechip" id="secScore" style="background:${sic.color};">${st.score === null ? "—" : Math.round(st.score) + "%"}</span>
+    </div>
+    <div class="sec-bar"><i id="secBar" style="width:${st.pct}%;"></i></div>
+    <div class="sec-warn hide" id="secWarn">⚠️ ${st.total - st.done} question(s) sans réponse dans cette section</div>
+    ${cards}
+  </div>
+  <div class="footerbar noprint"><div class="fb-in">
+    ${prev ? `<button class="fbtn ghost" data-action="goto-section" data-i="${state.sec - 1}">← Section précédente<small>${esc(prev.short)}</small></button>` : `<button class="fbtn ghost" data-action="back-home">🏠 Accueil</button>`}
+    ${next ? `<button class="fbtn primary" data-action="goto-section" data-i="${state.sec + 1}">Section suivante →<small>${esc(next.short)}</small></button>`
+           : `<button class="fbtn primary" data-action="open-report-current">📊 Voir le rapport<small>score final</small></button>`}
+  </div></div>`;
+
+  // Sans réponse dans la section ?
+  const sw = document.getElementById("secWarn");
+  if(sw && st.done < st.total) sw.classList.remove("hide");
+
+  window.scrollTo(0, 0);
+  // Positionner sur la première question sans réponse
+  if(state.autoJump){
+    const target = sec.questions.find(q => !audit.answers[q.id]);
+    if(target){
+      setTimeout(() => {
+        const el = app.querySelector(`.qcard[data-qid="${target.id}"]`);
+        if(el) el.scrollIntoView({ block:"center" });
+      }, 60);
+    }
+  }
+}
+
+function updateLive(){
+  if(!current) return;
+  const gs = globalStats(current);
+  const chip = document.getElementById("hScore");
+  if(chip){
+    if(gs.score === null){ chip.textContent = "—"; chip.style.background = "#94a3b8"; }
+    else { chip.textContent = Math.round(gs.score) + "%"; chip.style.background = interp(gs.score).color; }
+  }
+  const bar = document.getElementById("hBar");
+  if(bar) bar.style.width = gs.pct + "%";
+  SECTIONS.forEach((s, i) => {
+    const el = document.getElementById("chip-" + i);
+    if(!el) return;
+    const sti = sectionStats(s, current);
+    const c = el.querySelector(".cnt");
+    if(c) c.textContent = sti.done + "/" + sti.total;
+    el.classList.toggle("done", sti.done === sti.total);
+  });
+  if(SECTIONS[state.sec]){
+    const st = sectionStats(SECTIONS[state.sec], current);
+    const ss = document.getElementById("secScore");
+    if(ss){
+      if(st.score === null){ ss.textContent = "—"; ss.style.background = "#94a3b8"; }
+      else { ss.textContent = Math.round(st.score) + "%"; ss.style.background = interp(st.score).color; }
+    }
+    const sb = document.getElementById("secBar");
+    if(sb) sb.style.width = st.pct + "%";
+    const sw = document.getElementById("secWarn");
+    if(sw) sw.classList.toggle("hide", st.done === st.total);
+  }
+}
+
+/* ---------- Rapport ---------- */
+function renderReport(){
+  const audit = current;
+  if(!audit){ state.view = "list"; return render(); }
+  const gs = globalStats(audit);
+  const ic = interp(gs.score);
+  const r = 54, circ = 2 * Math.PI * r;
+  const off = gs.score === null ? circ : circ * (1 - gs.score / 100);
+
+  let secRows = "";
+  SECTIONS.forEach((s, i) => {
+    const st = gs.parts[i];
+    const col = st.score === null ? "#94a3b8" : interp(st.score).color;
+    secRows += `
+    <div class="secrow">
+      <div class="sr-top">
+        <b>${s.icon} ${esc(s.title)}</b>
+        ${st.na ? `<span class="meta">${st.na} N/A</span>` : ""}
+        <span class="scorechip" style="background:${col};">${st.score === null ? "—" : Math.round(st.score) + "%"}</span>
+      </div>
+      <div class="bar"><i style="width:${st.pct}%; background:${col};"></i></div>
+    </div>`;
+  });
+
+  let nc = "";
+  let ncCount = 0;
+  SECTIONS.forEach((s, i) => {
+    const items = s.questions.filter(q => audit.answers[q.id] === "non");
+    if(!items.length) return;
+    ncCount += items.length;
+    nc += `<div class="nc-sec"><h3>${s.icon} ${esc(s.title)}</h3>`;
+    for(const q of items){
+      const photos = audit.photos[q.id] || [];
+      const note = audit.notes[q.id] || "";
+      nc += `<div class="nc-item">
+        <p>${esc(q.t)}</p>
+        ${note ? `<p class="nc-note">📝 ${esc(note)}</p>` : ""}
+        ${photos.length ? `<div class="nc-photos">${photos.map((p, j) => `<img src="${p}" data-action="view-photo" data-qid="${q.id}" data-i="${j}" alt="photo">`).join("")}</div>` : ""}
+      </div>`;
+    }
+    nc += `</div>`;
+  });
+
+  app.innerHTML = `
+  <div class="topbar noprint"><div class="tb-in">
+    <button class="tb-back" data-action="back-from-report">←</button>
+    <div class="tb-title"><b>Rapport d'audit</b><small>${esc(audit.restaurant || "")} · ${fmtDate(audit.date)}</small></div>
+  </div></div>
+  <div class="wrap">
+    <div class="rep-hero">
+      <div class="gauge">
+        <svg width="150" height="150" viewBox="0 0 150 150">
+          <circle cx="75" cy="75" r="${r}" fill="none" stroke="#e2e8f0" stroke-width="13"/>
+          <circle cx="75" cy="75" r="${r}" fill="none" stroke="${ic.color}" stroke-width="13"
+            stroke-linecap="round" stroke-dasharray="${circ}" stroke-dashoffset="${off}"/>
+        </svg>
+        <div class="gval"><b style="color:${ic.color};">${gs.score === null ? "—" : Math.round(gs.score) + "%"}</b>
+        <small>${gs.done}/${TOTAL_Q} questions</small></div>
+      </div>
+      <div class="interp" style="background:${ic.color};">${ic.label}</div>
+      ${gs.done < TOTAL_Q ? `<div class="meta" style="margin-top:8px;">⚠️ Audit incomplet : score calculé sur les réponses saisies</div>` : ""}
+    </div>
+    <p class="rep-meta">Restaurant : <b>${esc(audit.restaurant || "—")}</b> · Auditeur : <b>${esc(audit.auditor || "—")}</b><br>
+    ${fmtDate(audit.date)} · N/A exclu du calcul, comme les « sans réponse »</p>
+    ${secRows}
+    <div class="rep-actions noprint">
+      <button class="btn primary" data-action="print-report">🖨️ Imprimer / PDF</button>
+      <button class="btn primary" data-action="share-report">📤 Partager</button>
+      <button class="btn ghost" data-action="export-csv">📄 Export CSV (Excel)</button>
+      <button class="btn ghost" data-action="back-from-report">✏️ Reprendre l'audit</button>
+    </div>
+    ${ncCount ? `<div class="nc-sec noprint-fix"><h2 style="font-size:18px; margin:22px 0 2px;">❌ ${ncCount} point(s) à améliorer</h2>${nc}</div>`
+              : `<div class="rep-ok">🎉 Aucun point « Non » : tout est conforme !</div>`}
+    <p class="legend">Barème : 95–100 Excellent · 90–94 Très bien · 80–89 Conforme · 70–79 À améliorer · 60–69 Insuffisant · &lt;60 Audit à refaire d'urgence.<br>
+    Score global = moyenne des ${SECTIONS.length} scores de section (règle identique au fichier Excel).</p>
+  </div>`;
+  window.scrollTo(0, 0);
+}
+
+/* ---------- Modales ---------- */
+const overlay = document.getElementById("overlay");
+function closeModal(){ overlay.innerHTML = ""; overlay.style.display = "none"; }
+function showModal(html){
+  overlay.innerHTML = `<div class="modal-bg" data-action="modal-bg">
+    <div class="sheet">${html}</div></div>`;
+  overlay.style.display = "block";
+}
+function modalNewAudit(){
+  showModal(`
+    <h3>Nouvel audit</h3>
+    <div class="field"><label>Restaurant / établissement *</label>
+      <input id="fRest" type="text" placeholder="Ex. Restaurant Centre" autocomplete="off"></div>
+    <div class="field"><label>Auditeur</label>
+      <input id="fAud" type="text" placeholder="Votre nom" autocomplete="off"></div>
+    <div class="field"><label>Date</label>
+      <input id="fDate" type="date" value="${todayISO()}"></div>
+    <button class="btn primary" data-action="create-audit">Commencer l'audit →</button>
+    <button class="btn ghost" data-action="close-modal">Annuler</button>`);
+  setTimeout(() => document.getElementById("fRest").focus(), 50);
+}
+function modalEditInfo(){
+  showModal(`
+    <h3>Infos de l'audit</h3>
+    <div class="field"><label>Restaurant / établissement</label>
+      <input id="fRest" type="text" value="${esc(current.restaurant || "")}"></div>
+    <div class="field"><label>Auditeur</label>
+      <input id="fAud" type="text" value="${esc(current.auditor || "")}"></div>
+    <div class="field"><label>Date</label>
+      <input id="fDate" type="date" value="${esc(current.date || todayISO())}"></div>
+    <button class="btn primary" data-action="save-info">Enregistrer</button>
+    <button class="btn ghost" data-action="close-modal">Annuler</button>`);
+}
+function openViewer(qid, i){
+  const photos = (current && current.photos[qid]) || [];
+  const p = photos[i];
+  if(!p) return;
+  state.viewer = { qid, i };
+  overlay.innerHTML = `<div class="viewer" data-action="close-viewer">
+    <img src="${p}" alt="photo">
+    <div class="viewer-actions">
+      <button class="btn danger" data-action="del-photo-viewer">🗑 Supprimer cette photo</button>
+      <button class="btn ghost" data-action="close-viewer" style="background:#fff;">Fermer</button>
+    </div></div>`;
+  overlay.style.display = "block";
+}
+
+/* ---------- Export / import / partage ---------- */
+function download(blob, name){
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 400);
+}
+function safeName(s){ return String(s || "audit").replace(/[^\w\- àâäéèêëîïôöùûüç]/gi, "").replace(/\s+/g, "-"); }
+
+function exportJSON(){
+  const data = JSON.stringify({ app:"audit-cuisine", version:1, exports:cache }, null, 1);
+  download(new Blob([data], { type:"application/json" }), "audit-cuisine-sauvegarde-" + todayISO() + ".json");
+  toast("Sauvegarde téléchargée ✓");
+}
+function exportCSV(){
+  if(!current) return;
+  const lines = ["Restaurant;Date;Auditeur;Section;Question;Reponse;Commentaire;Nb photos"];
+  SECTIONS.forEach(s => s.questions.forEach(q => {
+    const a = current.answers[q.id] || "";
+    const rep = a === "oui" ? "Oui" : a === "non" ? "Non" : a === "na" ? "N/A" : "";
+    lines.push([
+      current.restaurant, current.date, current.auditor, s.title, q.t, rep,
+      (current.notes[q.id] || "").replace(/[\r\n;]+/g, " "),
+      (current.photos[q.id] || []).length
+    ].map(v => String(v == null ? "" : v)).join(";"));
+  }));
+  const gs = globalStats(current);
+  lines.push("");
+  lines.push("SCORE GLOBAL;;;" + (gs.score === null ? "" : Math.round(gs.score) + " %") + ";;;" + interp(gs.score).label);
+  download(new Blob(["\uFEFF" + lines.join("\r\n")], { type:"text/csv;charset=utf-8" }),
+    "audit-" + safeName(current.restaurant) + "-" + current.date + ".csv");
+}
+function buildReportHtml(audit){
+  const gs = globalStats(audit);
+  const ic = interp(gs.score);
+  let body = "";
+  SECTIONS.forEach((s, i) => {
+    const st = gs.parts[i];
+    const col = st.score === null ? "#94a3b8" : interp(st.score).color;
+    body += `<tr><td>${esc(s.title)}</td><td style="color:${col};font-weight:700;">${st.score === null ? "—" : Math.round(st.score) + " %"}</td>
+      <td>${st.oui} ✓ / ${st.non} ✗${st.na ? " / " + st.na + " N/A" : ""}</td></tr>`;
+  });
+  let details = "";
+  SECTIONS.forEach(s => s.questions.forEach(q => {
+    if(audit.answers[q.id] !== "non") return;
+    const photos = audit.photos[q.id] || [];
+    details += `<div class="nc"><b>✗ ${esc(q.t)}</b>
+      ${audit.notes[q.id] ? `<div class="nn">${esc(audit.notes[q.id])}</div>` : ""}
+      ${photos.length ? `<div>${photos.map(p => `<img src="${p}">`).join("")}</div>` : ""}</div>`;
+  }));
+  return `<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8">
+  <title>Audit ${esc(audit.restaurant)} — ${esc(audit.date)}</title>
+  <style>
+    body{font-family:-apple-system,"Segoe UI",Roboto,Arial,sans-serif;color:#0f172a;max-width:760px;margin:24px auto;padding:0 16px;}
+    h1{font-size:24px;margin:0 0 4px;} .sub{color:#64748b;font-size:14px;margin-bottom:20px;}
+    .score{font-size:44px;font-weight:800;color:${ic.color};} .ilabel{display:inline-block;background:${ic.color};color:#fff;
+    padding:5px 14px;border-radius:999px;font-weight:700;font-size:14px;}
+    table{width:100%;border-collapse:collapse;margin:18px 0;font-size:14px;}
+    td,th{border-bottom:1px solid #e2e8f0;padding:8px 6px;text-align:left;}
+    th{background:#f1f5f9;}
+    .nc{border-left:4px solid #dc2626;background:#fff;border-radius:8px;padding:10px 12px;margin:10px 0;font-size:14px;
+    break-inside:avoid;border:1px solid #e2e8f0;border-left-width:4px;}
+    .nn{background:#fffbeb;color:#7c2d12;border-radius:6px;padding:6px 9px;margin-top:6px;font-size:13px;}
+    .nc img{width:110px;height:110px;object-fit:cover;border-radius:6px;margin:8px 8px 0 0;border:1px solid #e2e8f0;}
+    .legend{color:#64748b;font-size:12px;margin-top:22px;}
+    @media print{ body{margin:8mm auto;} }
+  </style></head><body>
+  <h1>🧑‍🍳 Audit Cuisine — ${esc(audit.restaurant || "")}</h1>
+  <div class="sub">${esc(audit.date ? fmtDate(audit.date) : "")} · Auditeur : ${esc(audit.auditor || "—")} · ${gs.done}/${TOTAL_Q} questions traitées</div>
+  <div><span class="score">${gs.score === null ? "—" : Math.round(gs.score) + " %"}</span> &nbsp;<span class="ilabel">${ic.label}</span></div>
+  <table><tr><th>Section</th><th>Score</th><th>Détail</th></tr>${body}</table>
+  ${details ? `<h2 style="font-size:18px;">❌ Points à améliorer</h2>${details}` : `<p>✅ Aucun point « Non » relevé.</p>`}
+  <p class="legend">Score global = moyenne des 13 scores de section. Barème : 95–100 Excellent · 90–94 Très bien · 80–89 Conforme ·
+  70–79 À améliorer · 60–69 Insuffisant · &lt;60 Audit à refaire d'urgence.<br>Rapport généré le ${new Date().toLocaleString("fr-FR")}.</p>
+  </body></html>`;
+}
+async function shareReport(){
+  if(!current) return;
+  const html = buildReportHtml(current);
+  const name = "audit-" + safeName(current.restaurant) + "-" + current.date + ".html";
+  try{
+    const file = new File([html], name, { type:"text/html" });
+    if(navigator.canShare && navigator.canShare({ files:[file] })){
+      await navigator.share({ files:[file], title:"Audit " + (current.restaurant || "") });
+      return;
+    }
+  }catch(e){ if(e && e.name === "AbortError") return; }
+  download(new Blob([html], { type:"text/html" }), name);
+  toast("Rapport téléchargé — envoyez-le par mail ou WhatsApp");
+}
+
+/* =====================================================================
+   ÉVÉNEMENTS
+   ===================================================================== */
+document.body.addEventListener("click", (e) => {
+  const el = e.target.closest("[data-action]");
+  if(!el) return;
+  const act = el.dataset.action;
+
+  if(act === "new-audit") modalNewAudit();
+  else if(act === "create-audit"){
+    const rest = document.getElementById("fRest").value.trim();
+    if(!rest){ toast("Merci d'indiquer le restaurant"); return; }
+    const rec = { id:newId(), restaurant:rest, auditor:document.getElementById("fAud").value.trim(),
+      date:document.getElementById("fDate").value || todayISO(),
+      createdAt:Date.now(), updatedAt:Date.now(), answers:{}, notes:{}, photos:{} };
+    cache.push(rec);
+    dbPut(rec).catch(console.error);
+    closeModal();
+    current = rec; state.view = "audit"; state.sec = 0; state.autoJump = false;
+    render();
+  }
+  else if(act === "close-modal") closeModal();
+  else if(act === "save-info"){
+    current.restaurant = document.getElementById("fRest").value.trim() || current.restaurant;
+    current.auditor = document.getElementById("fAud").value.trim();
+    current.date = document.getElementById("fDate").value || current.date;
+    scheduleSave(); closeModal(); render();
+  }
+  else if(act === "open-audit" || act === "open-report"){
+    const rec = cache.find(a => a.id === el.dataset.id);
+    if(!rec) return;
+    current = rec;
+    if(act === "open-report"){ state.view = "report"; render(); return; }
+    state.view = "audit"; state.autoJump = true;
+    state.sec = SECTIONS.findIndex(s => sectionStats(s, rec).done < s.questions.length);
+    if(state.sec < 0) state.sec = 0;
+    render();
+  }
+  else if(act === "dup-audit"){
+    const src = cache.find(a => a.id === el.dataset.id);
+    if(!src) return;
+    const rec = { id:newId(), restaurant:src.restaurant, auditor:src.auditor, date:todayISO(),
+      createdAt:Date.now(), updatedAt:Date.now(), answers:{}, notes:{}, photos:{} };
+    cache.push(rec);
+    dbPut(rec).then(() => { toast("Audit vierge créé (même restaurant)"); renderList(); }).catch(console.error);
+  }
+  else if(act === "del-audit"){
+    const rec = cache.find(a => a.id === el.dataset.id);
+    if(!rec) return;
+    if(!confirm("Supprimer définitivement l'audit « " + (rec.restaurant || "") + " » et ses photos ?")) return;
+    dbDel(rec.id).then(() => { cache = cache.filter(a => a.id !== rec.id); renderList(); toast("Audit supprimé"); }).catch(console.error);
+  }
+  else if(act === "export-json") exportJSON();
+  else if(act === "import-json") document.getElementById("importInput").click();
+  else if(act === "back-home"){ if(db){ dbAll().then(list => { cache = list; state.view = "list"; render(); }).catch(() => renderList()); } else renderList(); }
+  else if(act === "goto-section"){ state.sec = parseInt(el.dataset.i, 10); state.autoJump = true; renderAudit(); }
+  else if(act === "answer"){
+    const qid = el.dataset.qid, v = el.dataset.v;
+    const card = el.closest(".qcard");
+    if(current.answers[qid] === v) delete current.answers[qid];
+    else current.answers[qid] = v;
+    card.querySelectorAll(".seg .b").forEach(b => b.classList.toggle("sel", b.dataset.v === current.answers[qid]));
+    const note = card.querySelector(".note");
+    note.classList.toggle("hide", !(current.answers[qid] === "non" || note.value.trim()));
+    scheduleSave(); updateLive();
+  }
+  else if(act === "add-photo"){
+    const inp = document.getElementById("photoInput");
+    inp.dataset.qid = el.dataset.qid;
+    inp.value = "";
+    inp.click();
+  }
+  else if(act === "view-photo"){ e.stopPropagation(); openViewer(el.dataset.qid, parseInt(el.dataset.i, 10)); }
+  else if(act === "del-photo"){
+    const qid = el.dataset.qid, i = parseInt(el.dataset.i, 10);
+    if(!current || !current.photos[qid]) return;
+    current.photos[qid].splice(i, 1);
+    if(!current.photos[qid].length) delete current.photos[qid];
+    scheduleSave(); renderPhotoRow(qid);
+  }
+  else if(act === "open-report-current" || act === "open-report"){ state.view = "report"; render(); }
+  else if(act === "back-from-report"){ state.view = "audit"; render(); }
+  else if(act === "edit-info") modalEditInfo();
+  else if(act === "print-report") window.print();
+  else if(act === "share-report") shareReport();
+  else if(act === "export-csv") exportCSV();
+});
+
+// Champs de saisie (commentaires)
+app.addEventListener("input", (e) => {
+  const t = e.target;
+  if(t.classList && t.classList.contains("note") && current){
+    current.notes[t.dataset.qid] = t.value;
+    scheduleSave();
+  }
+});
+
+// Sélecteur de photos
+document.getElementById("photoInput").addEventListener("change", (e) => {
+  const files = Array.from(e.target.files || []);
+  if(files.length && e.target.dataset.qid) addPhotos(e.target.dataset.qid, files);
+});
+
+// Import de sauvegarde
+document.getElementById("importInput").addEventListener("change", async (e) => {
+  const f = e.target.files && e.target.files[0];
+  e.target.value = "";
+  if(!f || !db) return;
+  try{
+    const data = JSON.parse(await f.text());
+    const list = Array.isArray(data) ? data : (data.exports || []);
+    let n = 0;
+    for(const rec of list){
+      if(!rec || !rec.id || typeof rec.answers !== "object") continue;
+      rec.photos = rec.photos || {}; rec.notes = rec.notes || {};
+      await dbPut(rec); n++;
+    }
+    cache = await dbAll();
+    renderList();
+    toast(n + " audit(s) importé(s) ✓");
+  }catch(err){ console.error(err); toast("Fichier de sauvegarde invalide"); }
+});
+
+// Fermeture des surcouches
+overlay.addEventListener("click", (e) => {
+  const el = e.target.closest("[data-action]");
+  if(!el){ return; }
+  const act = el.dataset.action;
+  if(act === "modal-bg"){
+    if(e.target === el) closeModal();   // clic direct sur le fond, pas à l'intérieur de la fenêtre
+    return;
+  }
+  if(act === "close-viewer" || act === "del-photo-viewer"){
+    if(act === "del-photo-viewer" && state.viewer && current){
+      const { qid, i } = state.viewer;
+      current.photos[qid].splice(i, 1);
+      if(!current.photos[qid].length) delete current.photos[qid];
+      scheduleSave(); renderPhotoRow(qid);
+    }
+    state.viewer = null;
+    overlay.innerHTML = ""; overlay.style.display = "none";
+  }
+});
+
+/* ---------- Démarrage ---------- */
+(async function init(){
+  const ok = await openDB();
+  if(!ok){
+    app.innerHTML = `<div class="wrap"><div class="home-head"><h1>🧑‍🍳 Audit Cuisine</h1></div>
+      <div class="card">⚠️ Le stockage local n'est pas disponible dans ce navigateur.
+      Ouvrez ce fichier dans Safari ou Chrome.</div></div>`;
+    return;
+  }
+  cache = await dbAll();
+  renderList();
+})();
+</script>
+<script>
+if ("serviceWorker" in navigator && /^https?:$/.test(location.protocol)) {
+  addEventListener("load", () => navigator.serviceWorker.register("./sw.js").catch(() => {}));
+}
+</script>
+</body>
+</html>
