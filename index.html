@@ -74,7 +74,6 @@
   .qnum{flex:none; width:26px; height:26px; border-radius:9px; background:var(--brand-soft); color:var(--brand-dark);
     font-size:13px; font-weight:800; display:flex; align-items:center; justify-content:center; margin-top:1px;}
   .qtext{font-size:15px; font-weight:600; line-height:1.4;}
-  .qwarn{display:block; margin-top:6px; color:var(--warn); font-size:12.5px; font-weight:500;}
   .seg{display:grid; grid-template-columns:repeat(3,1fr); gap:8px;}
   .seg .b{border:1.5px solid var(--line); background:#f8fafc; border-radius:12px; padding:10px 4px;
     font-size:14.5px; font-weight:700; color:#475569; display:flex; align-items:center; justify-content:center; gap:7px; min-height:46px;}
@@ -227,7 +226,7 @@ const SECTIONS = [
   ]},
   { icon:"🌡️", title:"Vérification des chambres froides et des réserves", short:"Réserves", questions:[
     { t:"Vérification des DLC/DLUO effectuée" },
-    { t:"Y a-t-il des produits congelés sans autorisation ?", warn:true },
+    { t:"Y a-t-il des produits congelés sans autorisation ?" },
   ]},
   { icon:"❄️", title:"Chambre froide positive", short:"CF positive", questions:[
     { t:"Le FIFO est-il fait correctement ?" },
@@ -567,7 +566,7 @@ function renderAudit(){
     <div class="qcard" data-qid="${q.id}">
       <div class="qtop">
         <span class="qnum">${num}</span>
-        <div class="qtext">${esc(q.t)}${q.warn ? `<span class="qwarn">⚠️ Dans le fichier Excel d'origine, « Oui » rapporte un point ici. À confirmer si la logique doit être inversée (Non = conforme).</span>` : ""}</div>
+        <div class="qtext">${esc(q.t)}</div>
       </div>
       <div class="seg">
         <button class="b b-oui ${a === "oui" ? "sel" : ""}" data-action="answer" data-qid="${q.id}" data-v="oui">👍 <span>Oui</span></button>
