@@ -81,6 +81,9 @@
   .b-oui.sel{background:#dcfce7; border-color:var(--ok); color:#166534;}
   .b-non.sel{background:#fee2e2; border-color:var(--bad); color:#991b1b;}
   .b-na.sel{background:#e2e8f0; border-color:#94a3b8; color:#334155;}
+  /* Question inversée : « Non » est la réponse conforme (vert), « Oui » est un défaut (rouge) */
+  .qcard.inv .b-non.sel{background:#dcfce7; border-color:var(--ok); color:#166534;}
+  .qcard.inv .b-oui.sel{background:#fee2e2; border-color:var(--bad); color:#991b1b;}
   .note{width:100%; min-height:64px; margin-top:10px; border:1.5px solid var(--line); border-radius:12px;
     padding:9px 11px; font-size:16px; font-family:inherit; resize:vertical; background:#fffbeb;}
   .phrow{display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; align-items:center;}
@@ -226,7 +229,7 @@ const SECTIONS = [
   ]},
   { icon:"🌡️", title:"Vérification des chambres froides et des réserves", short:"Réserves", questions:[
     { t:"Vérification des DLC/DLUO effectuée" },
-    { t:"Y a-t-il des produits congelés sans autorisation ?" },
+    { t:"Y a-t-il des produits congelés sans autorisation ?", inv:true },
   ]},
   { icon:"❄️", title:"Chambre froide positive", short:"CF positive", questions:[
     { t:"Le FIFO est-il fait correctement ?" },
@@ -387,7 +390,12 @@ function sectionStats(sec, audit){
   let oui = 0, non = 0, na = 0;
   for(const q of sec.questions){
     const a = audit.answers[q.id];
-    if(a === "oui") oui++; else if(a === "non") non++; else if(a === "na") na++;
+    if(a === "na"){ na++; continue; }
+    if(q.inv){ // question inversée : la réponse conforme est « Non »
+      if(a === "oui") non++; else if(a === "non") oui++;
+    } else {
+      if(a === "oui") oui++; else if(a === "non") non++;
+    }
   }
   const answered = oui + non;
   const done = answered + na;
@@ -563,7 +571,7 @@ function renderAudit(){
     const photos = audit.photos[q.id] || [];
     if(q.group) cards += `<div class="group-label">${esc(q.group)}</div>`;
     cards += `
-    <div class="qcard" data-qid="${q.id}">
+    <div class="qcard ${q.inv ? "inv" : ""}" data-qid="${q.id}">
       <div class="qtop">
         <span class="qnum">${num}</span>
         <div class="qtext">${esc(q.t)}</div>
@@ -695,7 +703,7 @@ function renderReport(){
   let nc = "";
   let ncCount = 0;
   SECTIONS.forEach((s, i) => {
-    const items = s.questions.filter(q => audit.answers[q.id] === "non");
+    const items = s.questions.filter(q => audit.answers[q.id] === (q.inv ? "oui" : "non"));
     if(!items.length) return;
     ncCount += items.length;
     nc += `<div class="nc-sec"><h3>${s.icon} ${esc(s.title)}</h3>`;
@@ -840,7 +848,7 @@ function buildReportHtml(audit){
   });
   let details = "";
   SECTIONS.forEach(s => s.questions.forEach(q => {
-    if(audit.answers[q.id] !== "non") return;
+    if(audit.answers[q.id] !== (q.inv ? "oui" : "non")) return;
     const photos = audit.photos[q.id] || [];
     details += `<div class="nc"><b>✗ ${esc(q.t)}</b>
       ${audit.notes[q.id] ? `<div class="nn">${esc(audit.notes[q.id])}</div>` : ""}
