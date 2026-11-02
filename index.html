@@ -434,7 +434,17 @@ function scheduleSave(){
   setSaveStatus("saving");
   clearTimeout(saveTimer);
   saveTimer = setTimeout(async () => {
-    try{ if(db){ await dbPut(current); setSaveStatus("saved"); } }
+    try{
+      if(db){ await dbPut(current); setSaveStatus("saved"); }
+      if(reglages().autoCloud !== false){
+        const gs = globalStats(current);
+        if(gs.done === TOTAL_Q && (!current.cloudOk || Date.now() - current.cloudOk > 60000)){
+          cloudSauver(current, true)
+            .then(() => { dbPut(current).catch(() => {}); toast("☁️ Audit complet sauvegardé dans votre Drive"); })
+            .catch(() => {});
+        }
+      }
+    }
     catch(e){ console.error(e); setSaveStatus("error"); }
   }, 300);
 }
@@ -662,7 +672,7 @@ function renderList(){
       <div class="card-head" data-action="open-audit" data-id="${a.id}">
         <div style="flex:1; min-width:0;">
           <p class="card-title">${esc(a.restaurant || "Audit sans nom")}${nbCrit ? ` <span style="color:var(--bad);">⚠️ critique</span>` : ""}</p>
-          <div class="meta">${fmtDate(a.date)} · ${gs.done}/${TOTAL_Q} répondues</div>
+          <div class="meta">${fmtDate(a.date)} · ${gs.done}/${TOTAL_Q} répondues${a.cloudOk ? " · ☁️" : ""}</div>
           <div class="bar"><i style="width:${gs.pct}%; background:${ic.color};"></i></div>
         </div>
         <span class="scorechip" style="background:${ic.color};">${gs.score === null ? "—" : Math.round(gs.score) + "%"}${deltaHtml}</span>
@@ -671,6 +681,7 @@ function renderList(){
         <button class="btn ghost" data-action="open-audit" data-id="${a.id}">${gs.done < TOTAL_Q ? "✏️ Continuer" : "📂 Ouvrir"}</button>
         <button class="btn ghost" data-action="open-report" data-id="${a.id}">📊 Rapport</button>
         <button class="btn ghost" data-action="suivi-audit" data-id="${a.id}">🔁 Suivi</button>
+        <button class="btn ghost" data-action="cloud-save" data-id="${a.id}" title="Sauvegarder en ligne">${a.cloudOk ? "☁️✓" : "☁️"}</button>
         <button class="btn ghost" data-action="dup-audit" data-id="${a.id}">⧉ Dupliquer</button>
         <button class="btn danger" data-action="del-audit" data-id="${a.id}">🗑</button>
       </div>
@@ -680,6 +691,7 @@ function renderList(){
     <div class="tools">
       <button class="btn ghost" data-action="export-json">⬇️ Sauvegarde (fichier)</button>
       <button class="btn ghost" data-action="import-json">⬆️ Importer</button>
+      <button class="btn ghost" data-action="cloud-restore">☁️ Restaurer (cloud)</button>
     </div>
     <p class="tip">💡 Tout est enregistré automatiquement sur l'appareil, sans connexion internet.<br>
     Sur iPhone/Android : menu du navigateur → « Ajouter à l'écran d'accueil » pour l'utiliser comme une application.</p>
@@ -950,6 +962,7 @@ function renderReport(){
       <button class="btn primary" data-action="print-report">🖨️ Imprimer / PDF</button>
       <button class="btn primary" data-action="share-report">📤 Partager</button>
       <button class="btn ghost" data-action="export-csv">📄 Export CSV (Excel)</button>
+      <button class="btn ghost" data-action="cloud-save-current">☁️ En ligne</button>
       <button class="btn ghost" data-action="back-from-report">✏️ Reprendre l'audit</button>
     </div>
     ${ncCount ? `<div class="nc-sec"><h2 style="font-size:18px; margin:22px 0 2px;">❌ ${ncCount} point(s) à améliorer</h2>${nc}</div>`
@@ -1053,7 +1066,14 @@ function modalReglages(){
       <label for="fFocus" style="margin:0;">Mode focus : une question par écran 👆</label></div>
     <p class="meta" style="margin:8px 0;">En mode focus, répondez et l'app avance toute seule vers la prochaine question à contrôler. On peut aussi glisser avec le doigt.</p>
     <button class="btn ghost block" data-action="nav" data-v="grille">📝 Modifier la grille (questions perso)</button>
-    <button class="btn primary block" data-action="close-modal" style="margin-top:8px;">Fermer</button>`);
+    <h3 style="margin:18px 0 10px;">☁️ Sauvegarde en ligne</h3>
+    <div class="field"><label>Clé du relais</label>
+      <input id="fCleCloud" type="text" value="${esc(r.cle || "")}" placeholder="f65bca368ee2" autocomplete="off"></div>
+    <div class="setrow"><input id="fAutoCloud" type="checkbox" ${r.autoCloud !== false ? "checked" : ""}>
+      <label for="fAutoCloud" style="margin:0;">Sauvegarder en ligne dès qu'un audit est complet</label></div>
+    <button class="btn ghost block" data-action="cloud-restore">☁️ Restaurer depuis le Drive</button>
+    <p class="meta" style="margin:8px 0 0;">Les audits complets sont copiés dans votre Google Drive (dossier « Audit Cuisine Sauvegardes ») — à l'abri même si le téléphone est perdu.</p>
+    <button class="btn primary block" data-action="close-modal" style="margin-top:10px;">Fermer</button>`);
 }
 function openViewer(qid, i){
   const photos = (current && current.photos[qid]) || [];
@@ -1355,6 +1375,59 @@ function renderGrille(){
   window.scrollTo(0, 0);
 }
 
+/* ---- Sauvegarde en ligne (Google Drive via le relais) ---- */
+const RELAIS_CLOUD = "https://script.google.com/macros/s/AKfycbzp3Z5zY6ngeR2PJ9mDk50oZT4q5YJPoGau42AwXd7IV_HeHYOY06mPiRMYj90D3qnyaA/exec";
+
+async function cloudPost(cle, audit){
+  const resp = await fetch(RELAIS_CLOUD, { method:"POST", body: JSON.stringify({ cle, audit }) });
+  const txt = await resp.text();
+  let data;
+  try{ data = JSON.parse(txt); }
+  catch(e){ throw new Error("Réponse du relais invalide — mettez à jour le relais en version 3"); }
+  if(data.erreur) throw new Error(data.erreur);
+  return data;
+}
+async function cloudSauver(audit, silencieux){
+  const r = reglages();
+  if(!r.cle) throw new Error("Renseignez la clé du relais dans ⚙️ Réglages");
+  await cloudPost(r.cle, audit);
+  audit.cloudOk = Date.now();
+  if(!silencieux) toast("☁️ Sauvegardé dans votre Drive ✓");
+}
+async function cloudLister(){
+  const r = reglages();
+  if(!r.cle) throw new Error("Renseignez la clé du relais dans ⚙️ Réglages");
+  const resp = await fetch(RELAIS_CLOUD + "?cle=" + encodeURIComponent(r.cle) + "&sauvegardes=1");
+  const data = await resp.json();
+  if(data.erreur) throw new Error(data.erreur);
+  return data.audits || [];
+}
+async function cloudCharger(id){
+  const r = reglages();
+  if(!r.cle) throw new Error("Renseignez la clé du relais dans ⚙️ Réglages");
+  const resp = await fetch(RELAIS_CLOUD + "?cle=" + encodeURIComponent(r.cle) + "&charger=" + encodeURIComponent(id));
+  const data = await resp.json();
+  if(data.erreur) throw new Error(data.erreur);
+  return data.audit;
+}
+async function cloudRestaurer(){
+  try{
+    toast("Recherche des sauvegardes…");
+    const liste = await cloudLister();
+    if(!liste.length){
+      showModal(`<h3>☁️ Restaurer</h3><div class="empty">Aucune sauvegarde dans votre Drive pour l'instant.</div>
+        <button class="btn primary block" data-action="close-modal">Fermer</button>`);
+      return;
+    }
+    showModal(`<h3>☁️ Sauvegardes dans votre Drive</h3>
+      ${liste.map((a) => `
+        <div class="pl-item"><span style="flex:1; min-width:0;"><b style="font-size:13.5px;">${esc(a.restaurant || "?")}</b>
+        <span class="meta" style="display:block;">${esc(a.date || "?")} · ${Math.round((a.taille || 0) / 1024)} Ko</span></span>
+        <button class="btn ghost" data-action="cloud-import" data-id="${esc(a.id)}" style="min-height:38px; padding:8px 12px;">Importer</button></div>`).join("")}
+      <button class="btn primary block" data-action="close-modal" style="margin-top:10px;">Fermer</button>`);
+  }catch(e){ toast("Erreur : " + e.message); }
+}
+
 /* =====================================================================
    ÉVÉNEMENTS
    ===================================================================== */
@@ -1464,6 +1537,34 @@ document.body.addEventListener("click", (e) => {
   else if(act === "print-report") window.print();
   else if(act === "share-report") shareReport();
   else if(act === "export-csv") exportCSV();
+  else if(act === "cloud-save"){
+    const rec = cache.find((a) => a.id === el.dataset.id);
+    if(!rec) return;
+    toast("Sauvegarde en ligne…");
+    cloudSauver(rec)
+      .then(() => { dbPut(rec).catch(() => {}); renderList(); })
+      .catch((e) => toast("Erreur : " + e.message));
+  }
+  else if(act === "cloud-save-current"){
+    toast("Sauvegarde en ligne…");
+    cloudSauver(current)
+      .then(() => { dbPut(current).catch(() => {}); render(); })
+      .catch((e) => toast("Erreur : " + e.message));
+  }
+  else if(act === "cloud-restore"){ cloudRestaurer(); }
+  else if(act === "cloud-import"){
+    toast("Import depuis le Drive…");
+    cloudCharger(el.dataset.id)
+      .then(async (audit) => {
+        audit.actions = audit.actions || {};
+        await dbPut(audit);
+        cache = await dbAll();
+        closeModal();
+        renderList();
+        toast("Audit importé depuis le Drive ✓");
+      })
+      .catch((e) => toast("Erreur : " + e.message));
+  }
   else if(act === "open-suivi"){ state.view = "suivi"; render(); }
   else if(act === "add-cam"){
     const inp = document.getElementById("camInput");
@@ -1620,6 +1721,18 @@ document.body.addEventListener("change", (e) => {
     r.focus = t.checked;
     saveReglages(r);
     toast(t.checked ? "Mode focus activé ✓" : "Mode focus désactivé");
+  }
+  else if(t.id === "fCleCloud"){
+    const r = reglages();
+    r.cle = t.value.trim();
+    saveReglages(r);
+    toast(r.cle ? "Clé enregistrée ✓" : "Clé effacée");
+  }
+  else if(t.id === "fAutoCloud"){
+    const r = reglages();
+    r.autoCloud = t.checked;
+    saveReglages(r);
+    toast(t.checked ? "Sauvegarde en ligne automatique activée ✓" : "Sauvegarde en ligne automatique désactivée");
   }
 });
 
