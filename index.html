@@ -177,6 +177,22 @@
     z-index:99; opacity:0; pointer-events:none; transition:opacity .25s; max-width:86vw; text-align:center;}
   .toast.show{opacity:.96;}
 
+  .actrow{display:flex; gap:6px; margin-top:10px; align-items:center; flex-wrap:wrap;}
+  .actrow input{border:1.5px solid var(--line); border-radius:10px; padding:8px 10px; font-size:14px; flex:1; min-width:110px; font-family:inherit;}
+  .actstatut{border:none; border-radius:10px; padding:8px 12px; font-size:12.5px; font-weight:800; background:#fee2e2; color:#991b1b; min-height:38px;}
+  .actstatut.fait{background:#dcfce7; color:#166534;}
+  .fpos{flex:none; font-weight:800; font-size:14px; color:#334155; padding:0 6px; display:flex; align-items:center;}
+  .setrow{display:flex; align-items:center; gap:10px; margin:12px 0; font-size:14px; flex-wrap:wrap;}
+  .setrow input[type="checkbox"]{width:20px; height:20px;}
+  .pl-item{display:flex; align-items:center; gap:8px; padding:8px 10px; border-bottom:1px solid var(--line); font-size:13.5px;}
+  .pl-item:last-child{border-bottom:none;}
+  .pl-statut{font-size:11px; font-weight:800; padding:3px 9px; border-radius:99px; flex:none;}
+  .rep-logo{max-height:64px; max-width:180px; object-fit:contain; display:block; margin:0 auto 8px;}
+  .toutoui{border:1.5px solid var(--ok); background:#f0fdf4; color:#166534; border-radius:10px;
+    padding:7px 12px; font-size:12.5px; font-weight:800; flex:none;}
+  .cqrow{display:flex; gap:8px; margin:8px 0; align-items:center;}
+  .cqrow input{flex:1; border:1.5px solid var(--line); border-radius:10px; padding:10px 12px; font-size:16px; font-family:inherit;}
+  .cqdel{border:none; background:#fee2e2; color:#991b1b; width:32px; height:32px; border-radius:9px; font-size:15px; flex:none;}
   @media print{
     .noprint{display:none !important;}
     body{background:#fff;}
@@ -336,7 +352,27 @@ const SECTIONS = [
 ];
 // Identifiants stables
 SECTIONS.forEach((s, i) => s.questions.forEach((q, j) => { q.id = "s" + (i+1) + "q" + (j+1); }));
-const TOTAL_Q = SECTIONS.reduce((a, s) => a + s.questions.length, 0);
+let TOTAL_Q = SECTIONS.reduce((a, s) => a + s.questions.length, 0);
+function recalcTotal(){ TOTAL_Q = SECTIONS.reduce((a, s) => a + s.questions.length, 0); }
+
+/* ---- Réglages locaux ---- */
+function reglages(){ try{ return JSON.parse(localStorage.getItem("audit:reglages") || "{}"); }catch(e){ return {}; } }
+function saveReglages(r){ localStorage.setItem("audit:reglages", JSON.stringify(r)); }
+
+/* ---- Questions personnalisées (ajoutées en fin de section) ---- */
+function appliquerGrillePerso(){
+  const persos = reglages().grille || [];
+  SECTIONS.forEach((s) => { s.questions = s.questions.filter((q) => !q.perso); });
+  persos.forEach((p) => {
+    const s = SECTIONS[p.sec];
+    if(!s) return;
+    s.questions.push({ t:p.t, id:p.id, perso:true });
+  });
+  recalcTotal();
+}
+function restosUniques(){
+  return [...new Set(cache.map((a) => (a.restaurant || "").trim()).filter(Boolean))];
+}
 
 /* =====================================================================
    STOCKAGE (IndexedDB, sauvegarde automatique)
@@ -360,7 +396,8 @@ function dbDel(id){ return new Promise((res, rej) => { const tx = db.transaction
 /* =====================================================================
    ÉTAT
    ===================================================================== */
-const state = { view:"list", auditId:null, sec:0, autoJump:true, photoQid:null, viewer:null };
+const state = { view:"list", auditId:null, sec:0, autoJump:true, photoQid:null, viewer:null,
+  fq:0, suiviTab:"evolution", suiviResto:null, grpMois:null, grilleSec:0 };
 let current = null;         // audit en cours d'édition
 let cache = [];             // liste des audits
 let saveTimer = null;
@@ -483,6 +520,60 @@ function renderPhotoRow(qid){
     `<button class="addph" data-action="add-photo" data-qid="${qid}">📷 Photo</button>`;
 }
 
+/* ---- Graphiques SVG (sans dépendance) ---- */
+function svgLigne(serie, fmt){
+  const pts = serie.filter((p) => typeof p.val === "number");
+  if(pts.length < 2) return `<div class="empty">Pas assez d'audits pour tracer une courbe.</div>`;
+  const vals = pts.map((p) => p.val);
+  let min = Math.min(...vals), max = Math.max(...vals);
+  if(min === max){ min -= 1; max += 1; }
+  const marge = (max - min) * 0.14; min -= marge; max += marge;
+  const w = 640, hh = 240, mL = 56, mR = 18, mT = 20, mB = 36;
+  const xi = (i) => mL + (i * (w - mL - mR)) / Math.max(1, serie.length - 1);
+  const yi = (v) => mT + (1 - (v - min) / (max - min)) * (hh - mT - mB);
+  let path = "", started = false;
+  serie.forEach((p, i) => {
+    if(typeof p.val !== "number"){ started = false; return; }
+    path += (started ? " L" : " M") + xi(i).toFixed(1) + " " + yi(p.val).toFixed(1);
+    started = true;
+  });
+  const grille = [0, 0.5, 1].map((t) => {
+    const v = min + (max - min) * (1 - t);
+    return `<line x1="${mL}" x2="${w - mR}" y1="${yi(v).toFixed(1)}" y2="${yi(v).toFixed(1)}" stroke="#e2e8f0" stroke-width="1"></line>
+      <text x="${mL - 6}" y="${(yi(v) + 4).toFixed(1)}" text-anchor="end" font-size="10.5" fill="#64748b">${fmt(v)}</text>`;
+  }).join("");
+  const points = serie.map((p, i) => typeof p.val === "number"
+    ? `<circle cx="${xi(i).toFixed(1)}" cy="${yi(p.val).toFixed(1)}" r="4" fill="#0f766e"></circle>
+       <text x="${xi(i).toFixed(1)}" y="${hh - 14}" text-anchor="middle" font-size="10" fill="#64748b">${esc(p.label)}</text>` : "").join("");
+  const dernier = pts[pts.length - 1];
+  const idxD = serie.indexOf(dernier);
+  const etiq = `<text x="${Math.min(xi(idxD), w - mR - 4).toFixed(1)}" y="${Math.max(yi(dernier.val) - 10, mT + 8).toFixed(1)}" text-anchor="middle" font-size="12" font-weight="800" fill="#0f766e">${fmt(dernier.val)}</text>`;
+  return `<svg viewBox="0 0 ${w} ${hh}" style="width:100%;height:auto;" role="img" aria-label="courbe">${grille}
+    <path d="${path}" fill="none" stroke="#0f766e" stroke-width="2.5" stroke-linejoin="round"></path>${points}${etiq}</svg>`;
+}
+function svgBarresH(items, fmt){
+  items = items.filter((x) => typeof x.val === "number");
+  if(!items.length) return `<div class="empty">Pas de données</div>`;
+  const max = Math.max(...items.map((i) => Math.abs(i.val)), 1);
+  const rowH = 30, w = 620, labelW = 128;
+  const h = items.length * rowH + 6;
+  let s = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:auto;" role="img" aria-label="barres">`;
+  items.forEach((it, i) => {
+    const y = i * rowH + 4;
+    const bw = Math.max(2, Math.abs(it.val) / max * (w - labelW - 80));
+    const couleur = it.couleur || (it.val < 0 ? "#dc2626" : "#0f766e");
+    s += `<text x="${labelW - 6}" y="${y + 15}" text-anchor="end" font-size="11.5" fill="currentColor">${esc(it.label)}</text>`;
+    s += `<rect x="${labelW}" y="${y + 3}" width="${bw}" height="18" rx="4" fill="${couleur}" opacity=".85"></rect>`;
+    s += `<text x="${labelW + bw + 6}" y="${y + 17}" font-size="11.5" font-weight="700" fill="currentColor">${fmt(it.val)}</text>`;
+  });
+  return s + "</svg>";
+}
+function dateCourt(iso){
+  if(!iso) return "?";
+  const p = iso.split("-");
+  return p[2] + "/" + p[1];
+}
+
 /* =====================================================================
    VUES
    ===================================================================== */
@@ -492,15 +583,21 @@ function render(){
   if(state.view === "list") renderList();
   else if(state.view === "audit") renderAudit();
   else if(state.view === "report") renderReport();
+  else if(state.view === "suivi") renderSuivi();
+  else if(state.view === "grille") renderGrille();
 }
 
 /* ---------- Accueil : liste des audits ---------- */
 function renderList(){
   current = null;
   cache.sort((a,b) => (b.updatedAt||0) - (a.updatedAt||0));
+  const enCours = cache.filter((a) => globalStats(a).done < TOTAL_Q)
+    .sort((a,b) => (b.updatedAt||0) - (a.updatedAt||0))[0];
   let html = `
   <div class="topbar noprint"><div class="tb-in">
     <div class="tb-title"><b>🧑‍🍳 Audit Cuisine</b><small>HACCP · auto-évaluation restaurant</small></div>
+    <button class="tb-back" data-action="open-suivi" title="Suivi des audits">📊</button>
+    <button class="tb-back" data-action="settings" title="Réglages">⚙️</button>
   </div></div>
   <div class="wrap">
     <div class="home-head">
@@ -508,6 +605,11 @@ function renderList(){
       <p>${cache.length} audit${cache.length > 1 ? "s" : ""} enregistré${cache.length > 1 ? "s" : ""} sur cet appareil · ${TOTAL_Q} questions réparties en ${SECTIONS.length} sections</p>
     </div>
     <button class="btn primary block" data-action="new-audit">＋&nbsp; Nouvel audit</button>`;
+  if(enCours){
+    const gs = globalStats(enCours);
+    html += `<button class="btn ghost block" data-action="open-audit" data-id="${enCours.id}" style="margin-top:8px;">
+      ▶ Reprendre : ${esc(enCours.restaurant || "Audit")} · ${gs.done}/${TOTAL_Q} répondues</button>`;
+  }
   if(cache.length === 0){
     html += `<div class="empty">Aucun audit pour l'instant.<br>Creez votre premier audit : il sera sauvegardé automatiquement sur l'appareil.</div>`;
   }
@@ -544,7 +646,43 @@ function renderList(){
   window.scrollTo(0, 0);
 }
 
-/* ---------- Écran audit : une section à la fois ---------- */
+/* ---------- Écran audit : une section à la fois (ou une question en mode focus) ---------- */
+function qCardHtml(q, num, audit){
+  const a = audit.answers[q.id] || "";
+  const noteVal = audit.notes[q.id] || "";
+  const photos = audit.photos[q.id] || [];
+  const act = (audit.actions || {})[q.id] || {};
+  const defaut = audit.answers[q.id] === (q.inv ? "oui" : "non");
+  const statutFait = act.statut === "fait";
+  return `
+  <div class="qcard ${q.inv ? "inv" : ""}" data-qid="${q.id}">
+    ${q.group ? `<div class="group-label">${esc(q.group)}</div>` : ""}
+    <div class="qtop">
+      <span class="qnum">${num}</span>
+      <div class="qtext">${esc(q.t)}</div>
+    </div>
+    <div class="seg">
+      <button class="b b-oui ${a === "oui" ? "sel" : ""}" data-action="answer" data-qid="${q.id}" data-v="oui">👍 <span>Oui</span></button>
+      <button class="b b-non ${a === "non" ? "sel" : ""}" data-action="answer" data-qid="${q.id}" data-v="non">👎 <span>Non</span></button>
+      <button class="b b-na ${a === "na" ? "sel" : ""}" data-action="answer" data-qid="${q.id}" data-v="na"><span>N/A</span></button>
+    </div>
+    <textarea class="note ${defaut || noteVal ? "" : "hide"}" data-qid="${q.id}"
+      placeholder="Commentaire / action corrective…">${esc(noteVal)}</textarea>
+    <div class="actrow ${defaut ? "" : "hide"}">
+      <input class="actqui" data-qid="${q.id}" placeholder="Responsable" value="${esc(act.qui || "")}">
+      <input class="actquand" data-qid="${q.id}" type="date" value="${esc(act.quand || "")}">
+      <button class="actstatut ${statutFait ? "fait" : ""}" data-action="statut" data-qid="${q.id}">${statutFait ? "✓ Fait" : "À faire"}</button>
+    </div>
+    <div class="phrow" id="ph-${q.id}">
+      ${photos.map((p, i) => `
+        <span class="phwrap">
+          <img class="ph" src="${p}" data-action="view-photo" data-qid="${q.id}" data-i="${i}" alt="photo">
+          <button class="phdel" data-action="del-photo" data-qid="${q.id}" data-i="${i}" aria-label="Supprimer">×</button>
+        </span>`).join("")}
+      <button class="addph" data-action="add-photo" data-qid="${q.id}">📷 Photo</button>
+    </div>
+  </div>`;
+}
 function renderAudit(){
   const audit = current;
   if(!audit){ state.view = "list"; return render(); }
@@ -553,6 +691,8 @@ function renderAudit(){
   const st = sectionStats(sec, audit);
   const gic = interp(gs.score);
   const sic = st.score === null ? { color:"#94a3b8" } : interp(st.score);
+  const modeFocus = !!reglages().focus;
+  if(modeFocus) state.fq = Math.max(0, Math.min(sec.questions.length - 1, state.fq));
 
   let chips = "";
   SECTIONS.forEach((s, i) => {
@@ -563,39 +703,34 @@ function renderAudit(){
   });
 
   let cards = "";
-  let num = 0;
-  for(const q of sec.questions){
-    num++;
-    const a = audit.answers[q.id] || "";
-    const noteVal = audit.notes[q.id] || "";
-    const photos = audit.photos[q.id] || [];
-    if(q.group) cards += `<div class="group-label">${esc(q.group)}</div>`;
-    cards += `
-    <div class="qcard ${q.inv ? "inv" : ""}" data-qid="${q.id}">
-      <div class="qtop">
-        <span class="qnum">${num}</span>
-        <div class="qtext">${esc(q.t)}</div>
-      </div>
-      <div class="seg">
-        <button class="b b-oui ${a === "oui" ? "sel" : ""}" data-action="answer" data-qid="${q.id}" data-v="oui">👍 <span>Oui</span></button>
-        <button class="b b-non ${a === "non" ? "sel" : ""}" data-action="answer" data-qid="${q.id}" data-v="non">👎 <span>Non</span></button>
-        <button class="b b-na ${a === "na" ? "sel" : ""}" data-action="answer" data-qid="${q.id}" data-v="na"><span>N/A</span></button>
-      </div>
-      <textarea class="note ${a === "non" || noteVal ? "" : "hide"}" data-qid="${q.id}"
-        placeholder="Commentaire / action corrective…">${esc(noteVal)}</textarea>
-      <div class="phrow" id="ph-${q.id}">
-        ${photos.map((p, i) => `
-          <span class="phwrap">
-            <img class="ph" src="${p}" data-action="view-photo" data-qid="${q.id}" data-i="${i}" alt="photo">
-            <button class="phdel" data-action="del-photo" data-qid="${q.id}" data-i="${i}" aria-label="Supprimer">×</button>
-          </span>`).join("")}
-        <button class="addph" data-action="add-photo" data-qid="${q.id}">📷 Photo</button>
-      </div>
-    </div>`;
+  if(modeFocus){
+    const q = sec.questions[state.fq];
+    cards = qCardHtml(q, state.fq + 1, audit);
+  } else {
+    let num = 0;
+    for(const q of sec.questions){
+      num++;
+      if(q.group) cards += `<div class="group-label">${esc(q.group)}</div>`;
+      cards += qCardHtml(q, num, audit);
+    }
   }
 
   const prev = state.sec > 0 ? SECTIONS[state.sec - 1] : null;
   const next = state.sec < SECTIONS.length - 1 ? SECTIONS[state.sec + 1] : null;
+  const footer = modeFocus ? `
+  <div class="footerbar noprint"><div class="fb-in">
+    <button class="fbtn ghost" data-action="fq" data-d="-1" ${state.fq === 0 ? "disabled" : ""}>◀ Précédente</button>
+    <span class="fpos">${state.fq + 1}/${sec.questions.length}</span>
+    ${state.fq < sec.questions.length - 1
+      ? `<button class="fbtn primary" data-action="fq" data-d="1">Suivante ▶</button>`
+      : (next ? `<button class="fbtn primary" data-action="goto-section" data-i="${state.sec + 1}">Section suivante →<small>${esc(next.short)}</small></button>`
+              : `<button class="fbtn primary" data-action="open-report-current">📊 Rapport<small>score final</small></button>`)}
+  </div></div>` : `
+  <div class="footerbar noprint"><div class="fb-in">
+    ${prev ? `<button class="fbtn ghost" data-action="goto-section" data-i="${state.sec - 1}">← Section précédente<small>${esc(prev.short)}</small></button>` : `<button class="fbtn ghost" data-action="back-home">🏠 Accueil</button>`}
+    ${next ? `<button class="fbtn primary" data-action="goto-section" data-i="${state.sec + 1}">Section suivante →<small>${esc(next.short)}</small></button>`
+           : `<button class="fbtn primary" data-action="open-report-current">📊 Voir le rapport<small>score final</small></button>`}
+  </div></div>`;
 
   app.innerHTML = `
   <div class="topbar noprint">
@@ -615,25 +750,20 @@ function renderAudit(){
   <div class="wrap">
     <div class="sec-head">
       <h2>${sec.icon} ${esc(sec.title)}</h2>
+      <button class="toutoui" data-action="toutoui" title="Tout pré-cocher Oui, puis corriger les Non">✓ Tout Oui</button>
       <span class="scorechip" id="secScore" style="background:${sic.color};">${st.score === null ? "—" : Math.round(st.score) + "%"}</span>
     </div>
     <div class="sec-bar"><i id="secBar" style="width:${st.pct}%;"></i></div>
     <div class="sec-warn hide" id="secWarn">⚠️ ${st.total - st.done} question(s) sans réponse dans cette section</div>
     ${cards}
   </div>
-  <div class="footerbar noprint"><div class="fb-in">
-    ${prev ? `<button class="fbtn ghost" data-action="goto-section" data-i="${state.sec - 1}">← Section précédente<small>${esc(prev.short)}</small></button>` : `<button class="fbtn ghost" data-action="back-home">🏠 Accueil</button>`}
-    ${next ? `<button class="fbtn primary" data-action="goto-section" data-i="${state.sec + 1}">Section suivante →<small>${esc(next.short)}</small></button>`
-           : `<button class="fbtn primary" data-action="open-report-current">📊 Voir le rapport<small>score final</small></button>`}
-  </div></div>`;
+  ${footer}`;
 
-  // Sans réponse dans la section ?
   const sw = document.getElementById("secWarn");
   if(sw && st.done < st.total) sw.classList.remove("hide");
 
   window.scrollTo(0, 0);
-  // Positionner sur la première question sans réponse
-  if(state.autoJump){
+  if(!modeFocus && state.autoJump){
     const target = sec.questions.find(q => !audit.answers[q.id]);
     if(target){
       setTimeout(() => {
@@ -684,6 +814,7 @@ function renderReport(){
   const ic = interp(gs.score);
   const r = 54, circ = 2 * Math.PI * r;
   const off = gs.score === null ? circ : circ * (1 - gs.score / 100);
+  const logo = reglages().logo;
 
   let secRows = "";
   SECTIONS.forEach((s, i) => {
@@ -702,6 +833,7 @@ function renderReport(){
 
   let nc = "";
   let ncCount = 0;
+  let aFaire = 0, aFait = 0;
   SECTIONS.forEach((s, i) => {
     const items = s.questions.filter(q => audit.answers[q.id] === (q.inv ? "oui" : "non"));
     if(!items.length) return;
@@ -710,14 +842,26 @@ function renderReport(){
     for(const q of items){
       const photos = audit.photos[q.id] || [];
       const note = audit.notes[q.id] || "";
+      const act = (audit.actions || {})[q.id] || {};
+      const fait = act.statut === "fait";
+      if(act.qui || act.quand || act.statut) { fait ? aFait++ : aFaire++; }
       nc += `<div class="nc-item">
         <p>${esc(q.t)}</p>
         ${note ? `<p class="nc-note">📝 ${esc(note)}</p>` : ""}
+        ${(act.qui || act.quand || act.statut) ? `<p class="nc-note">📌 ${esc(act.qui || "—")}${act.quand ? " · pour le " + fmtDate(act.quand) : ""} · <b>${fait ? "FAIT" : "À FAIRE"}</b></p>` : ""}
         ${photos.length ? `<div class="nc-photos">${photos.map((p, j) => `<img src="${p}" data-action="view-photo" data-qid="${q.id}" data-i="${j}" alt="photo">`).join("")}</div>` : ""}
       </div>`;
     }
     nc += `</div>`;
   });
+
+  const planBloc = ncCount ? `
+    <div class="nc-sec"><h2 style="font-size:18px; margin:22px 0 2px;">📋 Plan d'action</h2>
+    <div class="card">
+      <div class="pl-item"><span>Actions à faire</span><span style="flex:1;"></span><span class="pl-statut" style="background:#fee2e2; color:#991b1b;">${aFaire}</span></div>
+      <div class="pl-item"><span>Actions terminées</span><span style="flex:1;"></span><span class="pl-statut" style="background:#dcfce7; color:#166534;">${aFait}</span></div>
+      <p class="meta" style="margin:8px 2px 0;">Les responsables et échéances se saisissent sous chaque point « Non » dans l'audit. Le statut se bascule d'un clic.</p>
+    </div></div>` : "";
 
   app.innerHTML = `
   <div class="topbar noprint"><div class="tb-in">
@@ -726,6 +870,7 @@ function renderReport(){
   </div></div>
   <div class="wrap">
     <div class="rep-hero">
+      ${logo ? `<img class="rep-logo" src="${logo}" alt="logo">` : ""}
       <div class="gauge">
         <svg width="150" height="150" viewBox="0 0 150 150">
           <circle cx="75" cy="75" r="${r}" fill="none" stroke="#e2e8f0" stroke-width="13"/>
@@ -747,8 +892,9 @@ function renderReport(){
       <button class="btn ghost" data-action="export-csv">📄 Export CSV (Excel)</button>
       <button class="btn ghost" data-action="back-from-report">✏️ Reprendre l'audit</button>
     </div>
-    ${ncCount ? `<div class="nc-sec noprint-fix"><h2 style="font-size:18px; margin:22px 0 2px;">❌ ${ncCount} point(s) à améliorer</h2>${nc}</div>`
+    ${ncCount ? `<div class="nc-sec"><h2 style="font-size:18px; margin:22px 0 2px;">❌ ${ncCount} point(s) à améliorer</h2>${nc}</div>`
               : `<div class="rep-ok">🎉 Aucun point « Non » : tout est conforme !</div>`}
+    ${planBloc}
     <p class="legend">Barème : 95–100 Excellent · 90–94 Très bien · 80–89 Conforme · 70–79 À améliorer · 60–69 Insuffisant · &lt;60 Audit à refaire d'urgence.<br>
     Score global = moyenne des ${SECTIONS.length} scores de section (règle identique au fichier Excel).</p>
   </div>`;
@@ -764,10 +910,12 @@ function showModal(html){
   overlay.style.display = "block";
 }
 function modalNewAudit(){
+  const restos = restosUniques();
   showModal(`
     <h3>Nouvel audit</h3>
     <div class="field"><label>Restaurant / établissement *</label>
-      <input id="fRest" type="text" placeholder="Ex. Restaurant Centre" autocomplete="off"></div>
+      <input id="fRest" type="text" list="listeRestos" placeholder="Ex. Restaurant Centre" autocomplete="off">
+      <datalist id="listeRestos">${restos.map((r) => `<option value="${esc(r)}">`).join("")}</datalist></div>
     <div class="field"><label>Auditeur</label>
       <input id="fAud" type="text" placeholder="Votre nom" autocomplete="off"></div>
     <div class="field"><label>Date</label>
@@ -777,16 +925,31 @@ function modalNewAudit(){
   setTimeout(() => document.getElementById("fRest").focus(), 50);
 }
 function modalEditInfo(){
+  const restos = restosUniques();
   showModal(`
     <h3>Infos de l'audit</h3>
     <div class="field"><label>Restaurant / établissement</label>
-      <input id="fRest" type="text" value="${esc(current.restaurant || "")}"></div>
+      <input id="fRest" type="text" list="listeRestos" value="${esc(current.restaurant || "")}">
+      <datalist id="listeRestos">${restos.map((r) => `<option value="${esc(r)}">`).join("")}</datalist></div>
     <div class="field"><label>Auditeur</label>
       <input id="fAud" type="text" value="${esc(current.auditor || "")}"></div>
     <div class="field"><label>Date</label>
       <input id="fDate" type="date" value="${esc(current.date || todayISO())}"></div>
     <button class="btn primary" data-action="save-info">Enregistrer</button>
     <button class="btn ghost" data-action="close-modal">Annuler</button>`);
+}
+function modalReglages(){
+  const r = reglages();
+  showModal(`
+    <h3>Réglages</h3>
+    <div class="field"><label>Logo du rapport (photo/image)</label>
+      <input id="fLogo" type="file" accept="image/*">
+      ${r.logo ? `<img src="${r.logo}" style="max-height:60px; margin-top:8px; border:1px solid #e2e8f0; border-radius:8px;">` : ""}</div>
+    <div class="setrow"><input id="fFocus" type="checkbox" ${r.focus ? "checked" : ""}>
+      <label for="fFocus" style="margin:0;">Mode focus : une question par écran 👆</label></div>
+    <p class="meta" style="margin:8px 0;">En mode focus, répondez et l'app avance toute seule vers la prochaine question à contrôler. On peut aussi glisser avec le doigt.</p>
+    <button class="btn ghost block" data-action="nav" data-v="grille">📝 Modifier la grille (questions perso)</button>
+    <button class="btn primary block" data-action="close-modal" style="margin-top:8px;">Fermer</button>`);
 }
 function openViewer(qid, i){
   const photos = (current && current.photos[qid]) || [];
@@ -839,6 +1002,7 @@ function exportCSV(){
 function buildReportHtml(audit){
   const gs = globalStats(audit);
   const ic = interp(gs.score);
+  const logo = reglages().logo;
   let body = "";
   SECTIONS.forEach((s, i) => {
     const st = gs.parts[i];
@@ -847,13 +1011,24 @@ function buildReportHtml(audit){
       <td>${st.oui} ✓ / ${st.non} ✗${st.na ? " / " + st.na + " N/A" : ""}</td></tr>`;
   });
   let details = "";
+  let planLignes = "";
+  let nbAFaire = 0, nbFait = 0;
   SECTIONS.forEach(s => s.questions.forEach(q => {
     if(audit.answers[q.id] !== (q.inv ? "oui" : "non")) return;
     const photos = audit.photos[q.id] || [];
+    const act = (audit.actions || {})[q.id] || {};
+    const fait = act.statut === "fait";
+    if(act.qui || act.quand || act.statut) { fait ? nbFait++ : nbAFaire++; }
     details += `<div class="nc"><b>✗ ${esc(q.t)}</b>
       ${audit.notes[q.id] ? `<div class="nn">${esc(audit.notes[q.id])}</div>` : ""}
+      ${(act.qui || act.quand || act.statut) ? `<div class="nn">📌 ${esc(act.qui || "—")}${act.quand ? " · pour le " + fmtDate(act.quand) : ""} · <b>${fait ? "FAIT" : "À FAIRE"}</b></div>` : ""}
       ${photos.length ? `<div>${photos.map(p => `<img src="${p}">`).join("")}</div>` : ""}</div>`;
+    if(act.qui || act.quand || act.statut){
+      planLignes += `<tr><td>${esc(q.t)}</td><td>${esc(act.qui || "—")}</td><td>${act.quand ? fmtDate(act.quand) : "—"}</td>
+        <td style="color:${fait ? "#15803d" : "#b91c1c"};font-weight:700;">${fait ? "FAIT" : "À FAIRE"}</td></tr>`;
+    }
   }));
+  const logoHtml = logo ? `<img src="${logo}" style="max-height:70px; display:block; margin:0 auto 10px;">` : "";
   return `<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8">
   <title>Audit ${esc(audit.restaurant)} — ${esc(audit.date)}</title>
   <style>
@@ -871,12 +1046,16 @@ function buildReportHtml(audit){
     .legend{color:#64748b;font-size:12px;margin-top:22px;}
     @media print{ body{margin:8mm auto;} }
   </style></head><body>
+  ${logoHtml}
   <h1>🧑‍🍳 Audit Cuisine — ${esc(audit.restaurant || "")}</h1>
   <div class="sub">${esc(audit.date ? fmtDate(audit.date) : "")} · Auditeur : ${esc(audit.auditor || "—")} · ${gs.done}/${TOTAL_Q} questions traitées</div>
   <div><span class="score">${gs.score === null ? "—" : Math.round(gs.score) + " %"}</span> &nbsp;<span class="ilabel">${ic.label}</span></div>
   <table><tr><th>Section</th><th>Score</th><th>Détail</th></tr>${body}</table>
   ${details ? `<h2 style="font-size:18px;">❌ Points à améliorer</h2>${details}` : `<p>✅ Aucun point « Non » relevé.</p>`}
-  <p class="legend">Score global = moyenne des 13 scores de section. Barème : 95–100 Excellent · 90–94 Très bien · 80–89 Conforme ·
+  ${planLignes ? `<h2 style="font-size:18px;">📋 Plan d'action</h2>
+  <table><tr><th>Point</th><th>Responsable</th><th>Échéance</th><th>Statut</th></tr>${planLignes}</table>
+  <p style="font-size:13px;">À faire : <b>${nbAFaire}</b> · Terminées : <b>${nbFait}</b></p>` : ""}
+  <p class="legend">Score global = moyenne des ${SECTIONS.length} scores de section. Barème : 95–100 Excellent · 90–94 Très bien · 80–89 Conforme ·
   70–79 À améliorer · 60–69 Insuffisant · &lt;60 Audit à refaire d'urgence.<br>Rapport généré le ${new Date().toLocaleString("fr-FR")}.</p>
   </body></html>`;
 }
@@ -895,6 +1074,140 @@ async function shareReport(){
   toast("Rapport téléchargé — envoyez-le par mail ou WhatsApp");
 }
 
+/* ---------- Suivi : évolution / comparaison / groupe ---------- */
+function renderSuivi(){
+  if(!state.suiviResto){ const r = restosUniques(); state.suiviResto = r[0] || null; }
+  const tab = state.suiviTab;
+  let corps = "";
+  const chipsRestos = restosUniques().map((r) =>
+    `<button class="chip ${r === state.suiviResto ? "active" : ""}" data-action="suivi-resto" data-r="${esc(r)}">${esc(r)}</button>`).join("");
+
+  if(tab === "evolution"){
+    const audits = cache.filter((a) => (a.restaurant || "").trim() === state.suiviResto)
+      .sort((a, b) => (a.date || "").localeCompare(b.date || "") || (a.createdAt || 0) - (b.createdAt || 0));
+    if(!audits.length){
+      corps = `<div class="navrow">${chipsRestos}</div><div class="card"><div class="empty">Aucun audit pour ce restaurant.</div></div>`;
+    } else {
+      const serie = audits.map((a) => { const g = globalStats(a);
+        return { label:dateCourt(a.date), val:g.score === null ? null : Math.round(g.score * 10) / 10 }; });
+      const courbe = `<div class="card"><h3>Score global dans le temps</h3>${svgLigne(serie, (v) => Math.round(v) + " %")}</div>`;
+      let delta = "";
+      if(audits.length >= 2){
+        const anc = audits[audits.length - 2], rec = audits[audits.length - 1];
+        const rows = SECTIONS.map((s) => {
+          const s1 = sectionStats(s, anc).score, s2 = sectionStats(s, rec).score;
+          if(s1 === null || s2 === null) return "";
+          const d = s2 - s1;
+          return `<div class="pl-item"><span style="flex:1;">${s.icon} ${esc(s.short)}</span>
+            <span><b>${Math.round(s1)} %</b> → <b>${Math.round(s2)} %</b></span>
+            <span class="${d >= 0 ? "up" : "down"}" style="font-weight:800;">${d >= 0 ? "▲" : "▼"} ${Math.abs(Math.round(d))}</span></div>`;
+        }).join("");
+        delta = `<div class="card"><h3>Évolution par section</h3><p class="meta" style="margin:0 2px 8px;">${fmtDate(anc.date)} → ${fmtDate(rec.date)}</p>${rows}</div>`;
+      }
+      const liste = audits.map((a) => { const g = globalStats(a); const ic2 = interp(g.score);
+        return `<div class="pl-item"><span style="flex:1;">${fmtDate(a.date)}</span><span class="meta">${g.done}/${TOTAL_Q} répondues</span>
+          <span class="scorechip" style="background:${ic2.color};">${g.score === null ? "—" : Math.round(g.score) + "%"}</span></div>`; }).join("");
+      corps = `<div class="navrow">${chipsRestos}</div>` + courbe + delta +
+        `<div class="card"><h3>${audits.length} audit(s) — ${esc(state.suiviResto || "")}</h3>${liste}</div>`;
+    }
+  }
+  else if(tab === "comparaison"){
+    const restos = restosUniques();
+    const dernierScore = (r) => {
+      const list = cache.filter((a) => (a.restaurant || "").trim() === r)
+        .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+      return list.length ? globalStats(list[0]).score : null;
+    };
+    const barres = restos.map((r) => ({ label:r, val:dernierScore(r) === null ? null : Math.round(dernierScore(r)) }))
+      .sort((a, b) => (b.val === null ? -1 : b.val) - (a.val === null ? -1 : a.val));
+    corps = `<div class="card"><h3>Dernier score par restaurant</h3>${svgBarresH(barres, (v) => Math.round(v) + " %")}</div>
+      <div class="card">${restos.map((r) => {
+        const audits = cache.filter((a) => (a.restaurant || "").trim() === r);
+        const sc = dernierScore(r);
+        const ic2 = interp(sc);
+        return `<div class="pl-item" data-action="suivi-resto" data-r="${esc(r)}" style="cursor:pointer;">
+          <span style="flex:1;">${esc(r)}</span><span class="meta">${audits.length} audit(s) · touchez pour l'évolution</span>
+          <span class="scorechip" style="background:${ic2.color};">${sc === null ? "—" : Math.round(sc) + "%"}</span></div>`;
+      }).join("")}</div>`;
+  }
+  else if(tab === "groupe"){
+    const moisMap = {};
+    cache.forEach((a) => { const k = (a.date || "").slice(0, 7); if(k) moisMap[k] = true; });
+    const mois = Object.keys(moisMap).sort().reverse();
+    if(!state.grpMois || !mois.includes(state.grpMois)) state.grpMois = mois[0] || null;
+    const chipsMois = mois.map((k) => {
+      const d = new Date(k + "-01T12:00:00");
+      return `<button class="chip ${k === state.grpMois ? "active" : ""}" data-action="grp-mois" data-k="${k}">${d.toLocaleDateString("fr-FR", { month:"long", year:"numeric" })}</button>`;
+    }).join("");
+    const audits = cache.filter((a) => (a.date || "").slice(0, 7) === state.grpMois);
+    const scores = audits.map((a) => globalStats(a).score).filter((s) => s !== null);
+    const moy = scores.length ? Math.round(scores.reduce((x, y) => x + y, 0) / scores.length) : null;
+    const parResto = {};
+    audits.forEach((a) => {
+      const r = (a.restaurant || "?").trim();
+      if(!parResto[r] || (a.updatedAt || 0) > (parResto[r].updatedAt || 0)) parResto[r] = a;
+    });
+    const barres = Object.keys(parResto).map((r) => {
+      const g = globalStats(parResto[r]);
+      return { label:r, val:g.score === null ? null : Math.round(g.score) };
+    }).sort((a, b) => (b.val === null ? -1 : b.val) - (a.val === null ? -1 : a.val));
+    const faib = {};
+    audits.forEach((a) => SECTIONS.forEach((s) => {
+      const st = sectionStats(s, a);
+      if(st.non > 0) faib[s.short] = (faib[s.short] || 0) + st.non;
+    }));
+    const topFaibles = Object.keys(faib).map((k) => ({ label:k, val:faib[k] })).sort((a, b) => b.val - a.val).slice(0, 3);
+    corps = `<div class="navrow">${chipsMois}</div>
+      <div class="card"><h3>${audits.length} audit(s) — moyenne du mois : <span style="color:var(--brand);">${moy === null ? "—" : moy + " %"}</span></h3>
+      ${svgBarresH(barres, (v) => Math.round(v) + " %")}</div>
+      ${topFaibles.length ? `<div class="card"><h3>Points « Non » les plus fréquents du mois</h3>${svgBarresH(topFaibles, (v) => String(v))}</div>` : ""}`;
+  }
+
+  app.innerHTML = `
+  <div class="topbar noprint"><div class="tb-in">
+    <button class="tb-back" data-action="back-home">←</button>
+    <div class="tb-title"><b>📊 Suivi des audits</b><small>${cache.length} audit(s) sur cet appareil</small></div>
+  </div></div>
+  <div class="chips noprint">
+    <button class="chip ${tab === "evolution" ? "active" : ""}" data-action="suivi-tab" data-t="evolution">📈 Évolution</button>
+    <button class="chip ${tab === "comparaison" ? "active" : ""}" data-action="suivi-tab" data-t="comparaison">🏆 Comparaison</button>
+    <button class="chip ${tab === "groupe" ? "active" : ""}" data-action="suivi-tab" data-t="groupe">👥 Groupe</button>
+  </div>
+  <div class="wrap">${corps}</div>`;
+  window.scrollTo(0, 0);
+}
+
+/* ---------- Éditeur de grille personnalisable ---------- */
+function renderGrille(){
+  const grille = reglages().grille || [];
+  if(state.grilleSec >= SECTIONS.length) state.grilleSec = 0;
+  const sec = SECTIONS[state.grilleSec];
+  const persos = grille.filter((p) => p.sec === state.grilleSec);
+  const chips = SECTIONS.map((s, i) =>
+    `<button class="chip ${i === state.grilleSec ? "active" : ""}" data-action="grille-sec" data-i="${i}">${s.icon} ${esc(s.short)}</button>`).join("");
+  app.innerHTML = `
+  <div class="topbar noprint"><div class="tb-in">
+    <button class="tb-back" data-action="nav" data-v="list">←</button>
+    <div class="tb-title"><b>📝 Grille personnalisable</b><small>Vos questions s'ajoutent en fin de section</small></div>
+  </div></div>
+  <div class="chips noprint">${chips}</div>
+  <div class="wrap">
+    <div class="card">
+      <h3>${sec.icon} ${esc(sec.title)}</h3>
+      ${persos.length ? persos.map((p) => `
+        <div class="cqrow"><span style="flex:1; font-size:14px;">${esc(p.t)}</span>
+        <button class="cqdel" data-action="grille-del" data-id="${esc(p.id)}" aria-label="Supprimer">✕</button></div>`).join("")
+        : `<p class="meta">Aucune question personnalisée dans cette section.</p>`}
+      <div class="cqrow">
+        <input id="cqText" placeholder="Nouvelle question…" autocomplete="off">
+        <button class="btn primary" data-action="grille-add" style="padding:10px 14px; min-height:42px;">＋</button>
+      </div>
+      <p class="meta">Les questions d'origine ne sont pas modifiables (vos audits restent comparables d'un mois à l'autre). Les questions ajoutées apparaissent en fin de section, dans tous les audits.</p>
+    </div>
+  </div>`;
+  window.scrollTo(0, 0);
+}
+
 /* =====================================================================
    ÉVÉNEMENTS
    ===================================================================== */
@@ -909,7 +1222,7 @@ document.body.addEventListener("click", (e) => {
     if(!rest){ toast("Merci d'indiquer le restaurant"); return; }
     const rec = { id:newId(), restaurant:rest, auditor:document.getElementById("fAud").value.trim(),
       date:document.getElementById("fDate").value || todayISO(),
-      createdAt:Date.now(), updatedAt:Date.now(), answers:{}, notes:{}, photos:{} };
+      createdAt:Date.now(), updatedAt:Date.now(), answers:{}, notes:{}, photos:{}, actions:{} };
     cache.push(rec);
     dbPut(rec).catch(console.error);
     closeModal();
@@ -926,6 +1239,7 @@ document.body.addEventListener("click", (e) => {
   else if(act === "open-audit" || act === "open-report"){
     const rec = cache.find(a => a.id === el.dataset.id);
     if(!rec) return;
+    rec.actions = rec.actions || {};
     current = rec;
     if(act === "open-report"){ state.view = "report"; render(); return; }
     state.view = "audit"; state.autoJump = true;
@@ -937,7 +1251,7 @@ document.body.addEventListener("click", (e) => {
     const src = cache.find(a => a.id === el.dataset.id);
     if(!src) return;
     const rec = { id:newId(), restaurant:src.restaurant, auditor:src.auditor, date:todayISO(),
-      createdAt:Date.now(), updatedAt:Date.now(), answers:{}, notes:{}, photos:{} };
+      createdAt:Date.now(), updatedAt:Date.now(), answers:{}, notes:{}, photos:{}, actions:{} };
     cache.push(rec);
     dbPut(rec).then(() => { toast("Audit vierge créé (même restaurant)"); renderList(); }).catch(console.error);
   }
@@ -957,9 +1271,29 @@ document.body.addEventListener("click", (e) => {
     if(current.answers[qid] === v) delete current.answers[qid];
     else current.answers[qid] = v;
     card.querySelectorAll(".seg .b").forEach(b => b.classList.toggle("sel", b.dataset.v === current.answers[qid]));
+    const qCourante = SECTIONS[state.sec].questions.find((x) => x.id === qid);
+    const nonConforme = current.answers[qid] === (qCourante && qCourante.inv ? "oui" : "non");
     const note = card.querySelector(".note");
-    note.classList.toggle("hide", !(current.answers[qid] === "non" || note.value.trim()));
+    note.classList.toggle("hide", !(nonConforme || note.value.trim()));
+    const actrow = card.querySelector(".actrow");
+    if(actrow) actrow.classList.toggle("hide", !nonConforme);
     scheduleSave(); updateLive();
+    if(reglages().focus && current){
+      const q = SECTIONS[state.sec].questions.find((x) => x.id === qid);
+      const conforme = v === "na" || (q && q.inv ? v === "non" : v === "oui");
+      if(conforme){
+        const qs = SECTIONS[state.sec].questions;
+        let n = state.fq + 1;
+        while(n < qs.length && current.answers[qs[n].id]) n++;
+        if(n < qs.length){ state.fq = n; }
+        else {
+          const ns = SECTIONS.findIndex((s, i) => i > state.sec && sectionStats(s, current).done < s.questions.length);
+          if(ns >= 0) state.sec = ns;
+          state.fq = 0;
+        }
+        setTimeout(() => { if(state.view === "audit") renderAudit(); }, 300);
+      }
+    }
   }
   else if(act === "add-photo"){
     const inp = document.getElementById("photoInput");
@@ -981,14 +1315,88 @@ document.body.addEventListener("click", (e) => {
   else if(act === "print-report") window.print();
   else if(act === "share-report") shareReport();
   else if(act === "export-csv") exportCSV();
+  else if(act === "open-suivi"){ state.view = "suivi"; render(); }
+  else if(act === "settings") modalReglages();
+  else if(act === "nav"){ closeModal(); state.view = el.dataset.v; render(); }
+  else if(act === "toutoui"){
+    const sec = SECTIONS[state.sec];
+    const nbRepondu = sec.questions.filter((q) => current.answers[q.id]).length;
+    if(nbRepondu > 0 && !confirm("Pré-cocher TOUTES les questions de la section en « Oui » ? (" + nbRepondu + " réponse(s) déjà saisies seront remplacées)")) return;
+    sec.questions.forEach((q) => { current.answers[q.id] = "oui"; });
+    scheduleSave(); renderAudit();
+    toast("Tout pré-coché Oui — corrigez les points Non 👎");
+  }
+  else if(act === "fq"){
+    state.fq = Math.max(0, Math.min(SECTIONS[state.sec].questions.length - 1, state.fq + parseInt(el.dataset.d, 10)));
+    renderAudit();
+  }
+  else if(act === "statut"){
+    const qid = el.dataset.qid;
+    const act2 = current.actions[qid] = current.actions[qid] || {};
+    act2.statut = act2.statut === "fait" ? "afaire" : "fait";
+    scheduleSave();
+    el.classList.toggle("fait", act2.statut === "fait");
+    el.textContent = act2.statut === "fait" ? "✓ Fait" : "À faire";
+  }
+  else if(act === "suivi-tab"){ state.suiviTab = el.dataset.t; renderSuivi(); }
+  else if(act === "suivi-resto"){ state.suiviResto = el.dataset.r; state.suiviTab = "evolution"; renderSuivi(); }
+  else if(act === "grp-mois"){ state.grpMois = el.dataset.k; renderSuivi(); }
+  else if(act === "grille-sec"){ state.grilleSec = parseInt(el.dataset.i, 10); renderGrille(); }
+  else if(act === "grille-add"){
+    const txt = document.getElementById("cqText").value.trim();
+    if(!txt){ toast("Écrivez la question d'abord"); return; }
+    const r = reglages();
+    r.grille = r.grille || [];
+    r.grille.push({ sec:state.grilleSec, t:txt, id:"cx" + Date.now().toString(36) });
+    saveReglages(r);
+    appliquerGrillePerso();
+    renderGrille();
+    toast("Question ajoutée ✓");
+  }
+  else if(act === "grille-del"){
+    const r = reglages();
+    r.grille = (r.grille || []).filter((p) => p.id !== el.dataset.id);
+    saveReglages(r);
+    appliquerGrillePerso();
+    renderGrille();
+  }
 });
 
 // Champs de saisie (commentaires)
 app.addEventListener("input", (e) => {
   const t = e.target;
-  if(t.classList && t.classList.contains("note") && current){
+  if(!current) return;
+  if(t.classList && t.classList.contains("note")){
     current.notes[t.dataset.qid] = t.value;
     scheduleSave();
+  }
+  else if(t.classList && (t.classList.contains("actqui") || t.classList.contains("actquand"))){
+    const act = current.actions[t.dataset.qid] = current.actions[t.dataset.qid] || {};
+    if(t.classList.contains("actqui")) act.qui = t.value;
+    else act.quand = t.value;
+    scheduleSave();
+  }
+});
+document.body.addEventListener("change", (e) => {
+  const t = e.target;
+  if(t.id === "fLogo" && t.files && t.files[0]){
+    const url = URL.createObjectURL(t.files[0]);
+    const img = new Image();
+    img.onload = () => {
+      const r = reglages();
+      r.logo = compressImage(img, 300, 0.8);
+      saveReglages(r);
+      URL.revokeObjectURL(url);
+      modalReglages();
+      toast("Logo enregistré ✓");
+    };
+    img.src = url;
+  }
+  else if(t.id === "fFocus"){
+    const r = reglages();
+    r.focus = t.checked;
+    saveReglages(r);
+    toast(t.checked ? "Mode focus activé ✓" : "Mode focus désactivé");
   }
 });
 
@@ -1049,8 +1457,24 @@ overlay.addEventListener("click", (e) => {
     return;
   }
   cache = await dbAll();
+  cache.forEach((a) => { a.actions = a.actions || {}; });
+  appliquerGrillePerso();
   renderList();
 })();
+
+// Glissement gauche/droite en mode focus
+let tX = null;
+app.addEventListener("touchstart", (e) => { tX = e.touches[0].clientX; }, { passive:true });
+app.addEventListener("touchend", (e) => {
+  if(tX === null) return;
+  const dx = e.changedTouches[0].clientX - tX;
+  tX = null;
+  if(state.view !== "audit" || !reglages().focus) return;
+  if(Math.abs(dx) < 60) return;
+  const qs = SECTIONS[state.sec].questions;
+  state.fq = Math.max(0, Math.min(qs.length - 1, state.fq + (dx < 0 ? 1 : -1)));
+  renderAudit();
+}, { passive:true });
 </script>
 <script>
 if ("serviceWorker" in navigator && /^https?:$/.test(location.protocol)) {
