@@ -193,6 +193,24 @@
   .cqrow{display:flex; gap:8px; margin:8px 0; align-items:center;}
   .cqrow input{flex:1; border:1.5px solid var(--line); border-radius:10px; padding:10px 12px; font-size:16px; font-family:inherit;}
   .cqdel{border:none; background:#fee2e2; color:#991b1b; width:32px; height:32px; border-radius:9px; font-size:15px; flex:none;}
+  .delta{font-size:11px; font-weight:800; margin-left:6px;}
+  .rappel{background:#fff7ed; color:#9a3412; border:1px solid #fed7aa; border-radius:8px;
+    padding:6px 9px; font-size:12.5px; margin-bottom:9px; font-weight:600;}
+  .crit-banner{background:#dc2626; color:#fff; border-radius:12px; padding:11px 14px;
+    font-weight:800; font-size:13.5px; margin:10px 0 2px; text-align:left;}
+  .tags{display:flex; flex-wrap:wrap; gap:6px; margin-top:8px;}
+  .tag{border:1.5px solid var(--brand); background:var(--brand-soft); color:var(--brand-dark);
+    border-radius:99px; padding:5px 10px; font-size:11.5px; font-weight:700;}
+  .chipgrp{display:flex; gap:5px; align-items:center; flex-wrap:wrap; width:100%;}
+  .chiplab{font-size:11.5px; font-weight:800; color:var(--muted); width:52px; flex:none;}
+  .qchip{border:1.5px solid var(--line); background:#f8fafc; border-radius:99px;
+    padding:5px 10px; font-size:11.5px; font-weight:700; color:#475569;}
+  .qchip.sel{background:var(--brand); border-color:var(--brand); color:#fff;}
+  .sigrow{display:flex; gap:10px;}
+  .sigbox{flex:1; text-align:center; min-width:0;}
+  .sigpad{width:100%; height:90px; border:1.5px dashed var(--line); border-radius:10px;
+    background:#fff; touch-action:none; display:block;}
+  .sigbox small{display:block; margin:4px 0; color:var(--muted); font-weight:700;}
   @media print{
     .noprint{display:none !important;}
     body{background:#fff;}
@@ -205,6 +223,7 @@
 <div id="app"></div>
 <input type="file" id="photoInput" accept="image/*" multiple class="hide"/>
 <input type="file" id="importInput" accept=".json,application/json" class="hide"/>
+<input type="file" id="camInput" accept="image/*" capture="environment" multiple class="hide"/>
 <div id="overlay"></div>
 <div id="toast" class="toast"></div>
 
@@ -225,8 +244,8 @@ const SECTIONS = [
   ]},
   { icon:"🧾", title:"Les auto-contrôles de cuisine", short:"Auto-contrôles", questions:[
     { t:"L'équipe est-elle autonome sur Traqfood ?" },
-    { t:"Les remises en température sont-elles faites correctement ? (+63 °C en moins d'une heure)" },
-    { t:"Les descentes en température sont-elles faites correctement ? (en dessous de 10 °C en moins de 2 heures)" },
+    { t:"Les remises en température sont-elles faites correctement ? (+63 °C en moins d'une heure)", crit:true },
+    { t:"Les descentes en température sont-elles faites correctement ? (en dessous de 10 °C en moins de 2 heures)", crit:true },
     { t:"Les tests d'huiles sont-ils faits tous les jours ?" },
     { t:"La filtration est-elle faite tous les jours ?" },
     { t:"Le planning de nettoyage quotidien est-il suivi ?" },
@@ -244,8 +263,8 @@ const SECTIONS = [
     { t:"Les déchets sont-ils stockés et gérés correctement ?" },
   ]},
   { icon:"🌡️", title:"Vérification des chambres froides et des réserves", short:"Réserves", questions:[
-    { t:"Vérification des DLC/DLUO effectuée" },
-    { t:"Y a-t-il des produits congelés sans autorisation ?", inv:true },
+    { t:"Vérification des DLC/DLUO effectuée", crit:true },
+    { t:"Y a-t-il des produits congelés sans autorisation ?", inv:true, crit:true },
   ]},
   { icon:"❄️", title:"Chambre froide positive", short:"CF positive", questions:[
     { t:"Le FIFO est-il fait correctement ?" },
@@ -294,7 +313,7 @@ const SECTIONS = [
     { t:"Les cuisiniers ont-ils retiré ou protégé leurs bijoux ? (hors alliance qui est tolérée)" },
     { t:"En cas de blessure, les cuisiniers ont-ils bien protégé leur plaie ?" },
     { t:"Le minuteur pour le lavage des mains est-il en place et utilisé ?" },
-    { t:"Les cuisiniers se lavent-ils les mains toutes les 30 minutes ?" },
+    { t:"Les cuisiniers se lavent-ils les mains toutes les 30 minutes ?", crit:true },
     { t:"Les tabliers et torchons propres et sales sont-ils séparés et rangés correctement ?" },
     { t:"Y a-t-il des « kits visiteurs » disponibles ?" },
     { t:"L'armoire à pharmacie est-elle complète ?" },
@@ -447,6 +466,13 @@ function globalStats(audit){
   const done = parts.reduce((a,p) => a + p.done, 0);
   return { parts, score, pct:(done / TOTAL_Q) * 100, done };
 }
+function criticalsNC(audit){
+  const out = [];
+  SECTIONS.forEach((s) => s.questions.forEach((q) => {
+    if(q.crit && audit.answers[q.id] === (q.inv ? "oui" : "non")) out.push(q);
+  }));
+  return out;
+}
 function interp(score){
   if(score === null) return { label:"—", color:"#94a3b8" };
   if(score >= 95) return { label:"Excellent", color:"#15803d" };
@@ -517,7 +543,8 @@ function renderPhotoRow(qid){
        <img class="ph" src="${p}" data-action="view-photo" data-qid="${qid}" data-i="${i}" alt="photo">
        <button class="phdel" data-action="del-photo" data-qid="${qid}" data-i="${i}" aria-label="Supprimer">×</button>
      </span>`).join("") +
-    `<button class="addph" data-action="add-photo" data-qid="${qid}">📷 Photo</button>`;
+    `<button class="addph" data-action="add-photo" data-qid="${qid}">🖼️ Galerie</button>
+     <button class="addph" data-action="add-cam" data-qid="${qid}">📸 Appareil photo</button>`;
 }
 
 /* ---- Graphiques SVG (sans dépendance) ---- */
@@ -616,19 +643,34 @@ function renderList(){
   for(const a of cache){
     const gs = globalStats(a);
     const ic = interp(gs.score);
+    const nbCrit = criticalsNC(a).length;
+    const anterieurs = cache.filter((x) => x.id !== a.id
+      && (x.restaurant || "").trim() === (a.restaurant || "").trim()
+      && globalStats(x).score !== null
+      && ((x.date || "") < (a.date || "") || ((x.date || "") === (a.date || "") && (x.createdAt || 0) < (a.createdAt || 0))))
+      .sort((x, y) => ((y.date || "") + y.createdAt).localeCompare((x.date || "") + x.createdAt));
+    let deltaHtml = "";
+    if(anterieurs.length){
+      const s1 = globalStats(anterieurs[0]).score, s2 = gs.score;
+      if(s1 !== null && s2 !== null){
+        const d = Math.round(s2 - s1);
+        if(Math.abs(d) >= 1) deltaHtml = `<span class="delta ${d >= 0 ? "up" : "down"}">${d >= 0 ? "+" : ""}${d} pts ${d >= 0 ? "↗" : "↘"}</span>`;
+      }
+    }
     html += `
     <div class="card">
       <div class="card-head" data-action="open-audit" data-id="${a.id}">
         <div style="flex:1; min-width:0;">
-          <p class="card-title">${esc(a.restaurant || "Audit sans nom")}</p>
+          <p class="card-title">${esc(a.restaurant || "Audit sans nom")}${nbCrit ? ` <span style="color:var(--bad);">⚠️ critique</span>` : ""}</p>
           <div class="meta">${fmtDate(a.date)} · ${gs.done}/${TOTAL_Q} répondues</div>
           <div class="bar"><i style="width:${gs.pct}%; background:${ic.color};"></i></div>
         </div>
-        <span class="scorechip" style="background:${ic.color};">${gs.score === null ? "—" : Math.round(gs.score) + "%"}</span>
+        <span class="scorechip" style="background:${ic.color};">${gs.score === null ? "—" : Math.round(gs.score) + "%"}${deltaHtml}</span>
       </div>
       <div class="row-actions">
         <button class="btn ghost" data-action="open-audit" data-id="${a.id}">${gs.done < TOTAL_Q ? "✏️ Continuer" : "📂 Ouvrir"}</button>
         <button class="btn ghost" data-action="open-report" data-id="${a.id}">📊 Rapport</button>
+        <button class="btn ghost" data-action="suivi-audit" data-id="${a.id}">🔁 Suivi</button>
         <button class="btn ghost" data-action="dup-audit" data-id="${a.id}">⧉ Dupliquer</button>
         <button class="btn danger" data-action="del-audit" data-id="${a.id}">🗑</button>
       </div>
@@ -647,6 +689,7 @@ function renderList(){
 }
 
 /* ---------- Écran audit : une section à la fois (ou une question en mode focus) ---------- */
+const TAGS_AUDIT = ["DLC absente", "Joint encrassé", "Pas filmé", "À dégraisser"];
 function qCardHtml(q, num, audit){
   const a = audit.answers[q.id] || "";
   const noteVal = audit.notes[q.id] || "";
@@ -654,23 +697,35 @@ function qCardHtml(q, num, audit){
   const act = (audit.actions || {})[q.id] || {};
   const defaut = audit.answers[q.id] === (q.inv ? "oui" : "non");
   const statutFait = act.statut === "fait";
+  const rem = (audit.rappels || {})[q.id];
+  const echeances = [["Immédiat", 0], ["48 h", 2], ["7 jours", 7], ["Prochain audit", "audit"]];
   return `
   <div class="qcard ${q.inv ? "inv" : ""}" data-qid="${q.id}">
     ${q.group ? `<div class="group-label">${esc(q.group)}</div>` : ""}
     <div class="qtop">
       <span class="qnum">${num}</span>
-      <div class="qtext">${esc(q.t)}</div>
+      <div class="qtext">${esc(q.t)}${q.crit ? ` <span style="color:var(--bad); font-weight:800;">🚨</span>` : ""}</div>
     </div>
+    ${rem ? `<div class="rappel">🔁 Audit du ${fmtDate(rem.date)} : ${esc(rem.note || "point non conforme")}</div>` : ""}
     <div class="seg">
       <button class="b b-oui ${a === "oui" ? "sel" : ""}" data-action="answer" data-qid="${q.id}" data-v="oui">👍 <span>Oui</span></button>
       <button class="b b-non ${a === "non" ? "sel" : ""}" data-action="answer" data-qid="${q.id}" data-v="non">👎 <span>Non</span></button>
       <button class="b b-na ${a === "na" ? "sel" : ""}" data-action="answer" data-qid="${q.id}" data-v="na"><span>N/A</span></button>
     </div>
     <textarea class="note ${defaut || noteVal ? "" : "hide"}" data-qid="${q.id}"
-      placeholder="Commentaire / action corrective…">${esc(noteVal)}</textarea>
+      placeholder="Commentaire / constat…">${esc(noteVal)}</textarea>
+    <div class="tags ${defaut || noteVal ? "" : "hide"}">
+      ${TAGS_AUDIT.map((t) => `<button class="tag" data-action="tag" data-qid="${q.id}" data-t="${esc(t)}">${esc(t)}</button>`).join("")}
+    </div>
     <div class="actrow ${defaut ? "" : "hide"}">
-      <input class="actqui" data-qid="${q.id}" placeholder="Responsable" value="${esc(act.qui || "")}">
-      <input class="actquand" data-qid="${q.id}" type="date" value="${esc(act.quand || "")}">
+      <div class="chipgrp"><span class="chiplab">Qui :</span>
+        ${["Manager", "Cuisine", "Maintenance"].map((p) =>
+          `<button class="qchip ${act.qui === p ? "sel" : ""}" data-action="act-qui" data-qid="${q.id}" data-v="${p}">${p}</button>`).join("")}
+      </div>
+      <div class="chipgrp"><span class="chiplab">Quand :</span>
+        ${echeances.map(([lab, n]) =>
+          `<button class="qchip ${act.echeance === lab ? "sel" : ""}" data-action="act-quand" data-qid="${q.id}" data-lab="${lab}" data-n="${n}">${lab}</button>`).join("")}
+      </div>
       <button class="actstatut ${statutFait ? "fait" : ""}" data-action="statut" data-qid="${q.id}">${statutFait ? "✓ Fait" : "À faire"}</button>
     </div>
     <div class="phrow" id="ph-${q.id}">
@@ -679,7 +734,8 @@ function qCardHtml(q, num, audit){
           <img class="ph" src="${p}" data-action="view-photo" data-qid="${q.id}" data-i="${i}" alt="photo">
           <button class="phdel" data-action="del-photo" data-qid="${q.id}" data-i="${i}" aria-label="Supprimer">×</button>
         </span>`).join("")}
-      <button class="addph" data-action="add-photo" data-qid="${q.id}">📷 Photo</button>
+      <button class="addph" data-action="add-photo" data-qid="${q.id}">🖼️ Galerie</button>
+      <button class="addph" data-action="add-cam" data-qid="${q.id}">📸 Appareil photo</button>
     </div>
   </div>`;
 }
@@ -755,6 +811,8 @@ function renderAudit(){
     </div>
     <div class="sec-bar"><i id="secBar" style="width:${st.pct}%;"></i></div>
     <div class="sec-warn hide" id="secWarn">⚠️ ${st.total - st.done} question(s) sans réponse dans cette section</div>
+    ${sec.questions.some((q) => q.crit && audit.answers[q.id] === (q.inv ? "oui" : "non"))
+      ? `<div class="crit-banner">🚨 Non-conformité critique HACCP dans cette section</div>` : ""}
     ${cards}
   </div>
   ${footer}`;
@@ -815,6 +873,7 @@ function renderReport(){
   const r = 54, circ = 2 * Math.PI * r;
   const off = gs.score === null ? circ : circ * (1 - gs.score / 100);
   const logo = reglages().logo;
+  const critiques = criticalsNC(audit);
 
   let secRows = "";
   SECTIONS.forEach((s, i) => {
@@ -848,7 +907,7 @@ function renderReport(){
       nc += `<div class="nc-item">
         <p>${esc(q.t)}</p>
         ${note ? `<p class="nc-note">📝 ${esc(note)}</p>` : ""}
-        ${(act.qui || act.quand || act.statut) ? `<p class="nc-note">📌 ${esc(act.qui || "—")}${act.quand ? " · pour le " + fmtDate(act.quand) : ""} · <b>${fait ? "FAIT" : "À FAIRE"}</b></p>` : ""}
+        ${(act.qui || act.echeance || act.quand || act.statut) ? `<p class="nc-note">📌 ${esc(act.qui || "—")} · ${esc(act.echeance || (act.quand ? "pour le " + fmtDate(act.quand) : "—"))} · <b>${fait ? "FAIT" : "À FAIRE"}</b></p>` : ""}
         ${photos.length ? `<div class="nc-photos">${photos.map((p, j) => `<img src="${p}" data-action="view-photo" data-qid="${q.id}" data-i="${j}" alt="photo">`).join("")}</div>` : ""}
       </div>`;
     }
@@ -869,6 +928,7 @@ function renderReport(){
     <div class="tb-title"><b>Rapport d'audit</b><small>${esc(audit.restaurant || "")} · ${fmtDate(audit.date)}</small></div>
   </div></div>
   <div class="wrap">
+    ${critiques.length ? `<div class="crit-banner">🚨 ${critiques.length} non-conformité${critiques.length > 1 ? "s" : ""} critique${critiques.length > 1 ? "s" : ""} HACCP — action immédiate requise, quel que soit le score global</div>` : ""}
     <div class="rep-hero">
       ${logo ? `<img class="rep-logo" src="${logo}" alt="logo">` : ""}
       <div class="gauge">
@@ -895,10 +955,54 @@ function renderReport(){
     ${ncCount ? `<div class="nc-sec"><h2 style="font-size:18px; margin:22px 0 2px;">❌ ${ncCount} point(s) à améliorer</h2>${nc}</div>`
               : `<div class="rep-ok">🎉 Aucun point « Non » : tout est conforme !</div>`}
     ${planBloc}
+    <div class="card">
+      <h3>✍️ Signatures</h3>
+      <div class="sigrow">
+        <div class="sigbox"><canvas class="sigpad" data-role="auditeur" width="320" height="120"></canvas><small>Auditeur</small>
+          <button class="btn ghost" data-action="sig-clear" data-role="auditeur" style="min-height:36px; padding:6px 12px;">Effacer</button></div>
+        <div class="sigbox"><canvas class="sigpad" data-role="responsable" width="320" height="120"></canvas><small>Responsable</small>
+          <button class="btn ghost" data-action="sig-clear" data-role="responsable" style="min-height:36px; padding:6px 12px;">Effacer</button></div>
+      </div>
+      <p class="meta" style="margin:8px 2px 0;">Signez au doigt : les signatures apparaissent dans le rapport imprimé et partagé.</p>
+    </div>
     <p class="legend">Barème : 95–100 Excellent · 90–94 Très bien · 80–89 Conforme · 70–79 À améliorer · 60–69 Insuffisant · &lt;60 Audit à refaire d'urgence.<br>
     Score global = moyenne des ${SECTIONS.length} scores de section (règle identique au fichier Excel).</p>
   </div>`;
+  initSignatures(audit);
   window.scrollTo(0, 0);
+}
+
+function posSur(cv, e){
+  const rect = cv.getBoundingClientRect();
+  return { x:(e.clientX - rect.left) * cv.width / rect.width, y:(e.clientY - rect.top) * cv.height / rect.height };
+}
+function initSignatures(audit){
+  document.querySelectorAll(".sigpad").forEach((cv) => {
+    const role = cv.dataset.role;
+    const ctx = cv.getContext("2d");
+    ctx.lineWidth = 2.5; ctx.lineCap = "round"; ctx.strokeStyle = "#0f172a";
+    const sig = (audit.signatures || {})[role];
+    if(sig){ const img = new Image(); img.onload = () => ctx.drawImage(img, 0, 0, cv.width, cv.height); img.src = sig; }
+    let dessine = false;
+    cv.onpointerdown = (e) => {
+      dessine = true;
+      const pos = posSur(cv, e);
+      ctx.beginPath(); ctx.moveTo(pos.x, pos.y);
+      try{ cv.setPointerCapture(e.pointerId); }catch(err){}
+    };
+    cv.onpointermove = (e) => {
+      if(!dessine) return;
+      const pos = posSur(cv, e);
+      ctx.lineTo(pos.x, pos.y); ctx.stroke();
+    };
+    cv.onpointerup = () => {
+      if(!dessine) return;
+      dessine = false;
+      audit.signatures = audit.signatures || {};
+      audit.signatures[role] = cv.toDataURL("image/png");
+      scheduleSave();
+    };
+  });
 }
 
 /* ---------- Modales ---------- */
@@ -959,10 +1063,47 @@ function openViewer(qid, i){
   overlay.innerHTML = `<div class="viewer" data-action="close-viewer">
     <img src="${p}" alt="photo">
     <div class="viewer-actions">
-      <button class="btn danger" data-action="del-photo-viewer">🗑 Supprimer cette photo</button>
+      <button class="btn primary" data-action="ann-open" data-qid="${qid}" data-i="${i}">✏️ Annoter</button>
+      <button class="btn danger" data-action="del-photo-viewer">🗑 Supprimer</button>
       <button class="btn ghost" data-action="close-viewer" style="background:#fff;">Fermer</button>
     </div></div>`;
   overlay.style.display = "block";
+}
+function openAnnotateur(qid, i){
+  const p = current.photos[qid][i];
+  overlay.innerHTML = `<div class="viewer">
+    <canvas id="annCv" style="max-width:96vw; max-height:66vh; border-radius:10px; touch-action:none;"></canvas>
+    <p style="color:#cbd5e1; font-size:12.5px; margin:8px 0 0;">Entourez au doigt le point à signaler (trait rouge)</p>
+    <div class="viewer-actions">
+      <button class="btn primary" data-action="ann-save" data-qid="${qid}" data-i="${i}">✓ Enregistrer</button>
+      <button class="btn ghost" data-action="ann-back" data-qid="${qid}" data-i="${i}" style="background:#fff;">Annuler</button>
+    </div></div>`;
+  overlay.style.display = "block";
+  const cv = document.getElementById("annCv");
+  const img = new Image();
+  img.onload = () => {
+    const maxW = Math.min(window.innerWidth - 24, 900);
+    const scale = Math.min(1, maxW / img.naturalWidth);
+    cv.width = Math.max(1, Math.round(img.naturalWidth * scale));
+    cv.height = Math.max(1, Math.round(img.naturalHeight * scale));
+    cv.getContext("2d").drawImage(img, 0, 0, cv.width, cv.height);
+    const ctx = cv.getContext("2d");
+    ctx.lineWidth = 5; ctx.strokeStyle = "#dc2626"; ctx.lineCap = "round"; ctx.lineJoin = "round";
+    let dessine = false;
+    cv.onpointerdown = (e) => {
+      dessine = true;
+      const pos = posSur(cv, e);
+      ctx.beginPath(); ctx.moveTo(pos.x, pos.y);
+      try{ cv.setPointerCapture(e.pointerId); }catch(err){}
+    };
+    cv.onpointermove = (e) => {
+      if(!dessine) return;
+      const pos = posSur(cv, e);
+      ctx.lineTo(pos.x, pos.y); ctx.stroke();
+    };
+    cv.onpointerup = () => { dessine = false; };
+  };
+  img.src = p;
 }
 
 /* ---------- Export / import / partage ---------- */
@@ -1021,10 +1162,10 @@ function buildReportHtml(audit){
     if(act.qui || act.quand || act.statut) { fait ? nbFait++ : nbAFaire++; }
     details += `<div class="nc"><b>✗ ${esc(q.t)}</b>
       ${audit.notes[q.id] ? `<div class="nn">${esc(audit.notes[q.id])}</div>` : ""}
-      ${(act.qui || act.quand || act.statut) ? `<div class="nn">📌 ${esc(act.qui || "—")}${act.quand ? " · pour le " + fmtDate(act.quand) : ""} · <b>${fait ? "FAIT" : "À FAIRE"}</b></div>` : ""}
+      ${(act.qui || act.echeance || act.quand || act.statut) ? `<div class="nn">📌 ${esc(act.qui || "—")} · ${esc(act.echeance || (act.quand ? "pour le " + fmtDate(act.quand) : "—"))} · <b>${fait ? "FAIT" : "À FAIRE"}</b></div>` : ""}
       ${photos.length ? `<div>${photos.map(p => `<img src="${p}">`).join("")}</div>` : ""}</div>`;
-    if(act.qui || act.quand || act.statut){
-      planLignes += `<tr><td>${esc(q.t)}</td><td>${esc(act.qui || "—")}</td><td>${act.quand ? fmtDate(act.quand) : "—"}</td>
+    if(act.qui || act.echeance || act.quand || act.statut){
+      planLignes += `<tr><td>${esc(q.t)}</td><td>${esc(act.qui || "—")}</td><td>${esc(act.echeance || (act.quand ? fmtDate(act.quand) : "—"))}</td>
         <td style="color:${fait ? "#15803d" : "#b91c1c"};font-weight:700;">${fait ? "FAIT" : "À FAIRE"}</td></tr>`;
     }
   }));
@@ -1051,10 +1192,16 @@ function buildReportHtml(audit){
   <div class="sub">${esc(audit.date ? fmtDate(audit.date) : "")} · Auditeur : ${esc(audit.auditor || "—")} · ${gs.done}/${TOTAL_Q} questions traitées</div>
   <div><span class="score">${gs.score === null ? "—" : Math.round(gs.score) + " %"}</span> &nbsp;<span class="ilabel">${ic.label}</span></div>
   <table><tr><th>Section</th><th>Score</th><th>Détail</th></tr>${body}</table>
+  ${criticalsNC(audit).length ? `<div style="background:#dc2626;color:#fff;border-radius:10px;padding:10px 14px;font-weight:800;margin:14px 0;">🚨 ${criticalsNC(audit).length} non-conformité(s) critique(s) HACCP — action immédiate requise</div>` : ""}
   ${details ? `<h2 style="font-size:18px;">❌ Points à améliorer</h2>${details}` : `<p>✅ Aucun point « Non » relevé.</p>`}
   ${planLignes ? `<h2 style="font-size:18px;">📋 Plan d'action</h2>
   <table><tr><th>Point</th><th>Responsable</th><th>Échéance</th><th>Statut</th></tr>${planLignes}</table>
   <p style="font-size:13px;">À faire : <b>${nbAFaire}</b> · Terminées : <b>${nbFait}</b></p>` : ""}
+  ${(audit.signatures && (audit.signatures.auditeur || audit.signatures.responsable)) ? `
+  <div style="display:flex; gap:24px; margin-top:18px; flex-wrap:wrap;">
+    ${audit.signatures.auditeur ? `<div><div style="font-size:12px;color:#64748b;">Signature auditeur</div><img src="${audit.signatures.auditeur}" style="max-width:230px; border-bottom:1px solid #cbd5e1;"></div>` : ""}
+    ${audit.signatures.responsable ? `<div><div style="font-size:12px;color:#64748b;">Signature responsable</div><img src="${audit.signatures.responsable}" style="max-width:230px; border-bottom:1px solid #cbd5e1;"></div>` : ""}
+  </div>` : ""}
   <p class="legend">Score global = moyenne des ${SECTIONS.length} scores de section. Barème : 95–100 Excellent · 90–94 Très bien · 80–89 Conforme ·
   70–79 À améliorer · 60–69 Insuffisant · &lt;60 Audit à refaire d'urgence.<br>Rapport généré le ${new Date().toLocaleString("fr-FR")}.</p>
   </body></html>`;
@@ -1277,6 +1424,8 @@ document.body.addEventListener("click", (e) => {
     note.classList.toggle("hide", !(nonConforme || note.value.trim()));
     const actrow = card.querySelector(".actrow");
     if(actrow) actrow.classList.toggle("hide", !nonConforme);
+    const tags = card.querySelector(".tags");
+    if(tags) tags.classList.toggle("hide", !(nonConforme || note.value.trim()));
     scheduleSave(); updateLive();
     if(reglages().focus && current){
       const q = SECTIONS[state.sec].questions.find((x) => x.id === qid);
@@ -1316,6 +1465,85 @@ document.body.addEventListener("click", (e) => {
   else if(act === "share-report") shareReport();
   else if(act === "export-csv") exportCSV();
   else if(act === "open-suivi"){ state.view = "suivi"; render(); }
+  else if(act === "add-cam"){
+    const inp = document.getElementById("camInput");
+    inp.dataset.qid = el.dataset.qid;
+    inp.value = "";
+    inp.click();
+  }
+  else if(act === "tag"){
+    const card = el.closest(".qcard");
+    const note = card.querySelector(".note");
+    note.classList.remove("hide");
+    note.value = note.value ? note.value + " — " + el.dataset.t : el.dataset.t;
+    current.notes[el.dataset.qid] = note.value;
+    scheduleSave();
+  }
+  else if(act === "act-qui"){
+    const act2 = current.actions[el.dataset.qid] = current.actions[el.dataset.qid] || {};
+    act2.qui = act2.qui === el.dataset.v ? "" : el.dataset.v;
+    scheduleSave();
+    el.classList.toggle("sel", !!act2.qui);
+  }
+  else if(act === "act-quand"){
+    const act2 = current.actions[el.dataset.qid] = current.actions[el.dataset.qid] || {};
+    const lab = el.dataset.lab, n = el.dataset.n;
+    if(act2.echeance === lab){ act2.echeance = ""; act2.quand = ""; el.classList.remove("sel"); }
+    else {
+      act2.echeance = lab;
+      act2.quand = n === "audit" ? "" : new Date(Date.now() + parseInt(n, 10) * 86400000).toISOString().slice(0, 10);
+      el.classList.add("sel");
+    }
+    scheduleSave();
+  }
+  else if(act === "suivi-audit"){
+    const src = cache.find((a) => a.id === el.dataset.id);
+    if(!src) return;
+    const rappels = {};
+    SECTIONS.forEach((s) => s.questions.forEach((q) => {
+      if(src.answers[q.id] === (q.inv ? "oui" : "non")){
+        rappels[q.id] = { date:src.date, note:(src.notes[q.id] || "") };
+      }
+    }));
+    const rec = { id:newId(), restaurant:src.restaurant, auditor:src.auditor, date:todayISO(),
+      createdAt:Date.now(), updatedAt:Date.now(), answers:{}, notes:{}, photos:{}, actions:{},
+      suiviDe:src.id, rappels };
+    cache.push(rec);
+    dbPut(rec).then(() => {
+      toast("Audit de suivi créé — anciens Non rappelés 🔁");
+      current = rec; state.view = "audit"; state.sec = 0; state.autoJump = false; state.fq = 0;
+      render();
+    }).catch(console.error);
+  }
+  else if(act === "sig-clear"){
+    const role = el.dataset.role;
+    const cv = document.querySelector(`.sigpad[data-role="${role}"]`);
+    if(cv) cv.getContext("2d").clearRect(0, 0, cv.width, cv.height);
+    if(current){
+      current.signatures = current.signatures || {};
+      delete current.signatures[role];
+      scheduleSave();
+    }
+  }
+  else if(act === "ann-open"){ state.ann = { qid:el.dataset.qid, i:parseInt(el.dataset.i, 10) }; openAnnotateur(el.dataset.qid, parseInt(el.dataset.i, 10)); }
+  else if(act === "ann-save"){
+    const cv = document.getElementById("annCv");
+    if(cv && state.ann && current){
+      current.photos[state.ann.qid][state.ann.i] = cv.toDataURL("image/jpeg", 0.82);
+      scheduleSave();
+      const cible = state.ann;
+      state.ann = null;
+      overlay.innerHTML = ""; overlay.style.display = "none";
+      renderPhotoRow(cible.qid);
+      toast("Photo annotée ✓");
+    }
+  }
+  else if(act === "ann-back"){
+    const cible = state.ann;
+    state.ann = null;
+    overlay.innerHTML = ""; overlay.style.display = "none";
+    if(cible) openViewer(cible.qid, cible.i);
+  }
   else if(act === "settings") modalReglages();
   else if(act === "nav"){ closeModal(); state.view = el.dataset.v; render(); }
   else if(act === "toutoui"){
@@ -1370,12 +1598,7 @@ app.addEventListener("input", (e) => {
     current.notes[t.dataset.qid] = t.value;
     scheduleSave();
   }
-  else if(t.classList && (t.classList.contains("actqui") || t.classList.contains("actquand"))){
-    const act = current.actions[t.dataset.qid] = current.actions[t.dataset.qid] || {};
-    if(t.classList.contains("actqui")) act.qui = t.value;
-    else act.quand = t.value;
-    scheduleSave();
-  }
+
 });
 document.body.addEventListener("change", (e) => {
   const t = e.target;
@@ -1402,6 +1625,10 @@ document.body.addEventListener("change", (e) => {
 
 // Sélecteur de photos
 document.getElementById("photoInput").addEventListener("change", (e) => {
+  const files = Array.from(e.target.files || []);
+  if(files.length && e.target.dataset.qid) addPhotos(e.target.dataset.qid, files);
+});
+document.getElementById("camInput").addEventListener("change", (e) => {
   const files = Array.from(e.target.files || []);
   if(files.length && e.target.dataset.qid) addPhotos(e.target.dataset.qid, files);
 });
