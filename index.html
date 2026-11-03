@@ -729,7 +729,7 @@ function renderList(){
     <div class="card">
       <div class="card-head" data-action="open-audit" data-id="${a.id}">
         <div style="flex:1; min-width:0;">
-          <p class="card-title">${esc(a.restaurant || "Audit sans nom")}${nbCrit ? ` <span style="color:var(--bad);">⚠️ critique</span>` : ""}</p>
+          <p class="card-title">${esc(a.restaurant || "Audit sans nom")}${nbCrit ? ` <span style="color:var(--bad);">⚠️ critique</span>` : ""}${a.suiviDe ? ` <span style="color:var(--warn); font-size:12px;">🔁 suivi</span>` : ""}</p>
           <div class="meta">${fmtDate(a.date)} · ${gs.done}/${TOTAL_Q} répondues${a.cloudOk ? " · ☁️" : ""}</div>
           <div class="bar"><i style="width:${gs.pct}%; background:${ic.color};"></i></div>
         </div>
