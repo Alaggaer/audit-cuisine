@@ -1169,7 +1169,7 @@ function modalReglages(){
     <p class="meta" style="margin:6px 0 0;">Appliqué au score global dès qu'une non-conformité critique HACCP est relevée.</p>
     <h3 style="margin:18px 0 10px;">☁️ Sauvegarde en ligne</h3>
     <div class="field"><label>Clé du relais</label>
-      <input id="fCleCloud" type="text" value="${esc(r.cle || "")}" placeholder="f65bca368ee2" autocomplete="off"></div>
+      <input id="fCleCloud" type="text" value="${esc(r.cle || CLE_CLOUD_DEFAUT)}" placeholder="••••••••" autocomplete="off"></div>
     <div class="setrow"><input id="fAutoCloud" type="checkbox" ${r.autoCloud !== false ? "checked" : ""}>
       <label for="fAutoCloud" style="margin:0;">Sauvegarder en ligne dès qu'un audit est complet</label></div>
     <button class="btn ghost block" data-action="cloud-restore">☁️ Restaurer depuis le Drive</button>
@@ -1482,6 +1482,7 @@ function renderGrille(){
 
 /* ---- Sauvegarde en ligne (Google Drive via le relais) ---- */
 const RELAIS_CLOUD = "https://script.google.com/macros/s/AKfycbzqmp8Dnh7b8Sh1pfEjc2xczoJyfXN7ctmNay7aOe2wnrOBSfGsUx11zZfxJ2h4H1L9/exec";
+const CLE_CLOUD_DEFAUT = "f65bca368ee2";
 
 async function cloudPost(cle, audit){
   const resp = await fetch(RELAIS_CLOUD, { method:"POST", body: JSON.stringify({ cle, audit }) });
@@ -1999,6 +2000,7 @@ overlay.addEventListener("click", (e) => {
   cache = await dbAllLege();
   cache.forEach((a) => { a.actions = a.actions || {}; });
   appliquerGrillePerso();
+  if(!reglages().cle){ const r = reglages(); r.cle = CLE_CLOUD_DEFAUT; saveReglages(r); }
   renderList();
 })();
 
