@@ -211,6 +211,17 @@
   .sigpad{width:100%; height:90px; border:1.5px dashed var(--line); border-radius:10px;
     background:#fff; touch-action:none; display:block;}
   .sigbox small{display:block; margin:4px 0; color:var(--muted); font-weight:700;}
+  .noterow{display:flex; gap:6px; align-items:stretch;}
+  .noterow .note{flex:1;}
+  .mic{flex:none; width:46px; border:1.5px solid var(--line); background:#fff; border-radius:10px; font-size:18px;}
+  .mic.ecoute{background:#dc2626; border-color:#dc2626; color:#fff; animation:pulse 1s infinite;}
+  @keyframes pulse{50%{opacity:.6;}}
+  .mesure{display:flex; align-items:center; gap:6px; margin-top:8px;}
+  .mesure input{width:110px; border:1.5px solid #0369a1; background:#f0f9ff; color:#075985; border-radius:10px;
+    padding:8px 10px; font-size:15px; font-weight:700; font-family:inherit;}
+  .mesure span{font-size:12px; font-weight:800; color:#0369a1;}
+  .recidive{background:#7c2d12; color:#fff; border-radius:6px; padding:2px 8px; font-size:11px;
+    font-weight:800; margin-left:6px; white-space:nowrap;}
   @media print{
     .noprint{display:none !important;}
     body{background:#fff;}
@@ -235,7 +246,7 @@
    ===================================================================== */
 const SECTIONS = [
   { icon:"🚚", title:"Contrôle et réception des livraisons", short:"Livraisons", questions:[
-    { t:"Le relevé des températures du camion est-il fait auprès du livreur ?" },
+    { t:"Le relevé des températures du camion est-il fait auprès du livreur ?", mesure:{unite:"°C", seuil:4, sens:"max"} },
     { t:"Est-ce qu'un cuisinier range rapidement les livraisons ?" },
     { t:"Les thermomètres sont-ils en état de fonctionnement (sonde + laser) ?" },
     { t:"Les produits sont-ils stockés correctement dans les chambres froides ? (aucun produit au sol)" },
@@ -244,9 +255,9 @@ const SECTIONS = [
   ]},
   { icon:"🧾", title:"Les auto-contrôles de cuisine", short:"Auto-contrôles", questions:[
     { t:"L'équipe est-elle autonome sur Traqfood ?" },
-    { t:"Les remises en température sont-elles faites correctement ? (+63 °C en moins d'une heure)", crit:true },
-    { t:"Les descentes en température sont-elles faites correctement ? (en dessous de 10 °C en moins de 2 heures)", crit:true },
-    { t:"Les tests d'huiles sont-ils faits tous les jours ?" },
+    { t:"Les remises en température sont-elles faites correctement ? (+63 °C en moins d'une heure)", crit:true, mesure:{unite:"°C", seuil:63, sens:"min"} },
+    { t:"Les descentes en température sont-elles faites correctement ? (en dessous de 10 °C en moins de 2 heures)", crit:true, mesure:{unite:"°C", seuil:10, sens:"max"} },
+    { t:"Les tests d'huiles sont-ils faits tous les jours ?", mesure:{unite:"% TPM", seuil:24, sens:"max"} },
     { t:"La filtration est-elle faite tous les jours ?" },
     { t:"Le planning de nettoyage quotidien est-il suivi ?" },
     { t:"La traçabilité est-elle faite correctement ? (les photos des produits sur Traqfood)" },
@@ -410,6 +421,15 @@ function appliquerGrillePerso(){
 function restosUniques(){
   return [...new Set(cache.map((a) => (a.restaurant || "").trim()).filter(Boolean))];
 }
+function allege(rec){
+  const c = Object.assign({}, rec);
+  delete c.photos;
+  return c;
+}
+async function dbAllLege(){
+  const liste = db ? await dbAll() : cache;
+  return liste.map(allege);
+}
 
 /* =====================================================================
    STOCKAGE (IndexedDB, sauvegarde automatique)
@@ -490,9 +510,17 @@ function sectionStats(sec, audit){
 function globalStats(audit){
   const parts = SECTIONS.map(s => sectionStats(s, audit));
   const scores = parts.filter(p => p.score !== null).map(p => p.score);
-  const score = scores.length ? scores.reduce((a,b) => a+b, 0) / scores.length : null;
+  const scoreBrut = scores.length ? scores.reduce((a,b) => a+b, 0) / scores.length : null;
   const done = parts.reduce((a,p) => a + p.done, 0);
-  return { parts, score, pct:(done / TOTAL_Q) * 100, done };
+  // Veto HACCP : plafonnement ou malus en cas de non-conformité critique
+  const nbCrit = criticalsNC(audit).length;
+  let score = scoreBrut, veto = "";
+  if(nbCrit > 0 && scoreBrut !== null){
+    const v = (reglages().vetocrit || "aucun");
+    if(v === "plafond" && scoreBrut > 69){ score = 69; veto = "Score plafonné à 69 % (non-conformité critique HACCP)"; }
+    else if(v === "malus"){ score = Math.max(0, scoreBrut - 10 * nbCrit); veto = "Malus appliqué : −10 pts par non-conformité critique (" + nbCrit + ")"; }
+  }
+  return { parts, score, scoreBrut, veto, pct:(done / TOTAL_Q) * 100, done };
 }
 function criticalsNC(audit){
   const out = [];
@@ -533,12 +561,23 @@ function todayISO(){ const d = new Date(); return d.getFullYear() + "-" + String
 /* =====================================================================
    PHOTOS : compression locale puis stockage
    ===================================================================== */
-function compressImage(img, maxDim, quality){
+function compressImage(img, maxDim, quality, filigrane){
   const scale = Math.min(1, maxDim / Math.max(img.naturalWidth, img.naturalHeight));
   const c = document.createElement("canvas");
   c.width = Math.max(1, Math.round(img.naturalWidth * scale));
   c.height = Math.max(1, Math.round(img.naturalHeight * scale));
-  c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+  const ctx = c.getContext("2d");
+  ctx.drawImage(img, 0, 0, c.width, c.height);
+  if(filigrane){
+    const fs = Math.max(15, Math.round(c.width / 30));
+    ctx.font = "600 " + fs + "px Arial";
+    ctx.textAlign = "right";
+    const y = c.height - fs * 0.7;
+    ctx.fillStyle = "rgba(0,0,0,.45)";
+    ctx.fillRect(0, y - fs * 1.2, c.width, fs * 1.5);
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText(filigrane, c.width - fs * 0.6, y);
+  }
   return c.toDataURL("image/jpeg", quality);
 }
 function addPhotos(qid, files){
@@ -551,7 +590,8 @@ function addPhotos(qid, files){
     const img = new Image();
     img.onload = () => {
       try{
-        const data = compressImage(img, 1280, 0.72);
+        const filigrane = (current.restaurant || "") + " — " + new Date().toLocaleString("fr-FR");
+        const data = compressImage(img, 1280, 0.72, filigrane);
         (current.photos[qid] = current.photos[qid] || []).push(data);
       }catch(e){ console.error(e); toast("Impossible de traiter une photo"); }
       URL.revokeObjectURL(url);
@@ -710,6 +750,7 @@ function renderList(){
       <button class="btn ghost" data-action="export-json">⬇️ Sauvegarde (fichier)</button>
       <button class="btn ghost" data-action="import-json">⬆️ Importer</button>
       <button class="btn ghost" data-action="cloud-restore">☁️ Restaurer (cloud)</button>
+      <button class="btn ghost" data-action="cloud-sync">🔄 Tout synchroniser</button>
     </div>
     <p class="tip">💡 Tout est enregistré automatiquement sur l'appareil, sans connexion internet.<br>
     Sur iPhone/Android : menu du navigateur → « Ajouter à l'écran d'accueil » pour l'utiliser comme une application.</p>
@@ -720,6 +761,18 @@ function renderList(){
 
 /* ---------- Écran audit : une section à la fois (ou une question en mode focus) ---------- */
 const TAGS_AUDIT = ["DLC absente", "Joint encrassé", "Pas filmé", "À dégraisser"];
+const TAGS_POSTES = ["Film déchiré", "DLC dépassée", "Produit non étiqueté"];
+const TAGS_PAR_SECTION = {
+  1: ["Camion non réfrigéré", "Réception non contrôlée", "Cartons au sol"],
+  2: ["Relevé manquant", "Traqfood non à jour", "Produit non étiqueté"],
+  3: ["DLC dépassée", "Absence d'étiquette", "Film déchiré"],
+  4: TAGS_POSTES, 5: TAGS_POSTES, 6: TAGS_POSTES, 7: TAGS_POSTES, 8: TAGS_POSTES, 9: TAGS_POSTES,
+  10: ["Barbe non couverte", "Bijou ou montre", "Chaussures non conformes"],
+  11: ["Joint moisi", "Graisse figée", "Calcaire"],
+  12: ["Joint moisi", "Graisse figée", "Calcaire"],
+  13: ["Attente du passe", "Grammage non respecté", "Température à cœur < 63 °C"]
+};
+const VocalDispo = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
 function qCardHtml(q, num, audit){
   const a = audit.answers[q.id] || "";
   const noteVal = audit.notes[q.id] || "";
@@ -729,6 +782,9 @@ function qCardHtml(q, num, audit){
   const statutFait = act.statut === "fait";
   const rem = (audit.rappels || {})[q.id];
   const echeances = [["Immédiat", 0], ["48 h", 2], ["7 jours", 7], ["Prochain audit", "audit"]];
+  const numSec = (q.id.match(/^s(\d+)/) || [])[1];
+  const tagsList = TAGS_PAR_SECTION[numSec] || TAGS_AUDIT;
+  const mesv = (audit.mesures || {})[q.id] || "";
   return `
   <div class="qcard ${q.inv ? "inv" : ""}" data-qid="${q.id}">
     ${q.group ? `<div class="group-label">${esc(q.group)}</div>` : ""}
@@ -742,10 +798,19 @@ function qCardHtml(q, num, audit){
       <button class="b b-non ${a === "non" ? "sel" : ""}" data-action="answer" data-qid="${q.id}" data-v="non">👎 <span>Non</span></button>
       <button class="b b-na ${a === "na" ? "sel" : ""}" data-action="answer" data-qid="${q.id}" data-v="na"><span>N/A</span></button>
     </div>
-    <textarea class="note ${defaut || noteVal ? "" : "hide"}" data-qid="${q.id}"
-      placeholder="Commentaire / constat…">${esc(noteVal)}</textarea>
+    ${q.mesure ? `
+    <div class="mesure">
+      <input class="mesv" data-qid="${q.id}" type="number" step="0.1" inputmode="decimal"
+        placeholder="__ ${q.mesure.unite}" value="${esc(mesv)}">
+      <span>relevé ${q.mesure.sens === "min" ? "≥ " + q.mesure.seuil : "≤ " + q.mesure.seuil} ${q.mesure.unite} — bascule auto Oui/Non</span>
+    </div>` : ""}
+    <div class="noterow ${defaut || noteVal ? "" : "hide"}">
+      <textarea class="note" data-qid="${q.id}"
+        placeholder="Commentaire / constat…">${esc(noteVal)}</textarea>
+      ${VocalDispo ? `<button class="mic" data-action="dictee" data-qid="${q.id}" title="Dicter le constat">🎙️</button>` : ""}
+    </div>
     <div class="tags ${defaut || noteVal ? "" : "hide"}">
-      ${TAGS_AUDIT.map((t) => `<button class="tag" data-action="tag" data-qid="${q.id}" data-t="${esc(t)}">${esc(t)}</button>`).join("")}
+      ${tagsList.map((t) => `<button class="tag" data-action="tag" data-qid="${q.id}" data-t="${esc(t)}">${esc(t)}</button>`).join("")}
     </div>
     <div class="actrow ${defaut ? "" : "hide"}">
       <div class="chipgrp"><span class="chiplab">Qui :</span>
@@ -796,6 +861,10 @@ function renderAudit(){
     let num = 0;
     for(const q of sec.questions){
       num++;
+      const reponse = audit.answers[q.id] || "";
+      const nonConforme = reponse === (q.inv ? "oui" : "non");
+      if(state.filtre === "arep" && (reponse === "oui" || reponse === "na")) continue;
+      if(state.filtre === "nc" && !nonConforme) continue;
       cards += qCardHtml(q, num, audit);
     }
   }
@@ -842,6 +911,11 @@ function renderAudit(){
     <div class="sec-warn hide" id="secWarn">⚠️ ${st.total - st.done} question(s) sans réponse dans cette section</div>
     ${sec.questions.some((q) => q.crit && audit.answers[q.id] === (q.inv ? "oui" : "non"))
       ? `<div class="crit-banner">🚨 Non-conformité critique HACCP dans cette section</div>` : ""}
+    ${modeFocus ? "" : `<div class="navrow noprint">
+      <button class="navchip ${(state.filtre || "tout") === "tout" ? "active" : ""}" data-action="filtre" data-v="tout">Tout</button>
+      <button class="navchip ${state.filtre === "arep" ? "active" : ""}" data-action="filtre" data-v="arep">À répondre</button>
+      <button class="navchip ${state.filtre === "nc" ? "active" : ""}" data-action="filtre" data-v="nc">Non conformes</button>
+    </div>`}
     ${cards}
   </div>
   ${footer}`;
@@ -932,9 +1006,10 @@ function renderReport(){
       const note = audit.notes[q.id] || "";
       const act = (audit.actions || {})[q.id] || {};
       const fait = act.statut === "fait";
+      const recidive = !!(audit.rappels || {})[q.id];
       if(act.qui || act.quand || act.statut) { fait ? aFait++ : aFaire++; }
       nc += `<div class="nc-item">
-        <p>${esc(q.t)}</p>
+        <p>${esc(q.t)}${recidive ? `<span class="recidive">🔥 RÉCIDIVE — non corrigé depuis l'audit précédent</span>` : ""}</p>
         ${note ? `<p class="nc-note">📝 ${esc(note)}</p>` : ""}
         ${(act.qui || act.echeance || act.quand || act.statut) ? `<p class="nc-note">📌 ${esc(act.qui || "—")} · ${esc(act.echeance || (act.quand ? "pour le " + fmtDate(act.quand) : "—"))} · <b>${fait ? "FAIT" : "À FAIRE"}</b></p>` : ""}
         ${photos.length ? `<div class="nc-photos">${photos.map((p, j) => `<img src="${p}" data-action="view-photo" data-qid="${q.id}" data-i="${j}" alt="photo">`).join("")}</div>` : ""}
@@ -970,10 +1045,12 @@ function renderReport(){
         <small>${gs.done}/${TOTAL_Q} questions</small></div>
       </div>
       <div class="interp" style="background:${ic.color};">${ic.label}</div>
+      ${gs.veto ? `<div class="meta" style="margin-top:8px; color:var(--bad); font-weight:700;">⚖️ ${esc(gs.veto)}${gs.scoreBrut !== null ? " — score brut : " + Math.round(gs.scoreBrut) + " %" : ""}</div>` : ""}
       ${gs.done < TOTAL_Q ? `<div class="meta" style="margin-top:8px;">⚠️ Audit incomplet : score calculé sur les réponses saisies</div>` : ""}
     </div>
     <p class="rep-meta">Restaurant : <b>${esc(audit.restaurant || "—")}</b> · Auditeur : <b>${esc(audit.auditor || "—")}</b><br>
     ${fmtDate(audit.date)} · N/A exclu du calcul, comme les « sans réponse »</p>
+    ${(audit.startedAt && audit.completedAt) ? `<p class="rep-meta">⏱️ Audit réalisé de ${new Date(audit.startedAt).toLocaleTimeString("fr-FR", { hour:"2-digit", minute:"2-digit" })} à ${new Date(audit.completedAt).toLocaleTimeString("fr-FR", { hour:"2-digit", minute:"2-digit" })} (${Math.floor((audit.completedAt - audit.startedAt) / 3600000)} h ${String(Math.round((audit.completedAt - audit.startedAt) % 3600000 / 60000)).padStart(2, "0")})</p>` : ""}
     ${secRows}
     <div class="rep-actions noprint">
       <button class="btn primary" data-action="print-report">🖨️ Imprimer / PDF</button>
@@ -1083,6 +1160,13 @@ function modalReglages(){
       <label for="fFocus" style="margin:0;">Mode focus : une question par écran 👆</label></div>
     <p class="meta" style="margin:8px 0;">En mode focus, répondez et l'app avance toute seule vers la prochaine question à contrôler. On peut aussi glisser avec le doigt.</p>
     <button class="btn ghost block" data-action="nav" data-v="grille">📝 Modifier la grille (questions perso)</button>
+    <h3 style="margin:18px 0 10px;">🚨 Non-conformités critiques</h3>
+    <div class="chipgrp"><span class="chiplab">Effet :</span>
+      <button class="vetochip ${(r.vetocrit || "aucun") === "aucun" ? "sel" : ""}" data-action="vetocrit" data-v="aucun">Alerte seule</button>
+      <button class="vetochip ${r.vetocrit === "plafond" ? "sel" : ""}" data-action="vetocrit" data-v="plafond">Score plafonné 69 %</button>
+      <button class="vetochip ${r.vetocrit === "malus" ? "sel" : ""}" data-action="vetocrit" data-v="malus">−10 pts / critique</button>
+    </div>
+    <p class="meta" style="margin:6px 0 0;">Appliqué au score global dès qu'une non-conformité critique HACCP est relevée.</p>
     <h3 style="margin:18px 0 10px;">☁️ Sauvegarde en ligne</h3>
     <div class="field"><label>Clé du relais</label>
       <input id="fCleCloud" type="text" value="${esc(r.cle || "")}" placeholder="f65bca368ee2" autocomplete="off"></div>
@@ -1154,8 +1238,9 @@ function download(blob, name){
 }
 function safeName(s){ return String(s || "audit").replace(/[^\w\- àâäéèêëîïôöùûüç]/gi, "").replace(/\s+/g, "-"); }
 
-function exportJSON(){
-  const data = JSON.stringify({ app:"audit-cuisine", version:1, exports:cache }, null, 1);
+async function exportJSON(){
+  const complet = db ? await dbAll() : cache;
+  const data = JSON.stringify({ app:"audit-cuisine", version:1, exports:complet }, null, 1);
   download(new Blob([data], { type:"application/json" }), "audit-cuisine-sauvegarde-" + todayISO() + ".json");
   toast("Sauvegarde téléchargée ✓");
 }
@@ -1197,7 +1282,8 @@ function buildReportHtml(audit){
     const act = (audit.actions || {})[q.id] || {};
     const fait = act.statut === "fait";
     if(act.qui || act.quand || act.statut) { fait ? nbFait++ : nbAFaire++; }
-    details += `<div class="nc"><b>✗ ${esc(q.t)}</b>
+    const recidive = !!(audit.rappels || {})[q.id];
+    details += `<div class="nc"><b>✗ ${esc(q.t)}${recidive ? ` <span style="background:#7c2d12;color:#fff;border-radius:6px;padding:2px 8px;font-size:11px;">🔥 RÉCIDIVE</span>` : ""}</b>
       ${audit.notes[q.id] ? `<div class="nn">${esc(audit.notes[q.id])}</div>` : ""}
       ${(act.qui || act.echeance || act.quand || act.statut) ? `<div class="nn">📌 ${esc(act.qui || "—")} · ${esc(act.echeance || (act.quand ? "pour le " + fmtDate(act.quand) : "—"))} · <b>${fait ? "FAIT" : "À FAIRE"}</b></div>` : ""}
       ${photos.length ? `<div>${photos.map(p => `<img src="${p}">`).join("")}</div>` : ""}</div>`;
@@ -1226,8 +1312,10 @@ function buildReportHtml(audit){
   </style></head><body>
   ${logoHtml}
   <h1>🧑‍🍳 Audit Cuisine — ${esc(audit.restaurant || "")}</h1>
-  <div class="sub">${esc(audit.date ? fmtDate(audit.date) : "")} · Auditeur : ${esc(audit.auditor || "—")} · ${gs.done}/${TOTAL_Q} questions traitées</div>
+  <div class="sub">${esc(audit.date ? fmtDate(audit.date) : "")} · Auditeur : ${esc(audit.auditor || "—")} · ${gs.done}/${TOTAL_Q} questions traitées
+  ${(audit.startedAt && audit.completedAt) ? ` · ⏱️ de ${new Date(audit.startedAt).toLocaleTimeString("fr-FR", { hour:"2-digit", minute:"2-digit" })} à ${new Date(audit.completedAt).toLocaleTimeString("fr-FR", { hour:"2-digit", minute:"2-digit" })}` : ""}</div>
   <div><span class="score">${gs.score === null ? "—" : Math.round(gs.score) + " %"}</span> &nbsp;<span class="ilabel">${ic.label}</span></div>
+  ${gs.veto ? `<p style="color:#b91c1c;font-weight:700;font-size:13px;">⚖️ ${esc(gs.veto)}${gs.scoreBrut !== null ? " — score brut : " + Math.round(gs.scoreBrut) + " %" : ""}</p>` : ""}
   <table><tr><th>Section</th><th>Score</th><th>Détail</th></tr>${body}</table>
   ${criticalsNC(audit).length ? `<div style="background:#dc2626;color:#fff;border-radius:10px;padding:10px 14px;font-weight:800;margin:14px 0;">🚨 ${criticalsNC(audit).length} non-conformité(s) critique(s) HACCP — action immédiate requise</div>` : ""}
   ${details ? `<h2 style="font-size:18px;">❌ Points à améliorer</h2>${details}` : `<p>✅ Aucun point « Non » relevé.</p>`}
@@ -1427,6 +1515,36 @@ async function cloudCharger(id){
   if(data.erreur) throw new Error(data.erreur);
   return data.audit;
 }
+async function cloudToutSynchro(){
+  const r = reglages();
+  if(!r.cle) throw new Error("Renseignez la clé du relais dans ⚙️ Réglages");
+  const distants = await cloudLister();
+  let pousses = 0, importes = 0;
+  const locaux = {};
+  cache.forEach((a) => locaux[a.id] = a);
+  for(const a of cache){
+    const dist = distants.find((x) => x.id === a.id);
+    const majDist = dist ? Date.parse(dist.maj) || 0 : 0;
+    if(!dist || (a.updatedAt || 0) > majDist){
+      let complet = a;
+      if(db){ const c = await dbGet(a.id); if(c) complet = c; }
+      await cloudPost(r.cle, complet);
+      pousses++;
+    }
+  }
+  for(const e of distants){
+    const loc = locaux[e.id];
+    const majDist = Date.parse(e.maj) || 0;
+    if(!loc || majDist > (loc.updatedAt || 0)){
+      const audit = await cloudCharger(e.id);
+      audit.actions = audit.actions || {};
+      await dbPut(audit);
+      importes++;
+    }
+  }
+  cache = await dbAllLege();
+  return { pousses, importes };
+}
 async function cloudRestaurer(){
   try{
     toast("Recherche des sauvegardes…");
@@ -1448,7 +1566,7 @@ async function cloudRestaurer(){
 /* =====================================================================
    ÉVÉNEMENTS
    ===================================================================== */
-document.body.addEventListener("click", (e) => {
+document.body.addEventListener("click", async (e) => {
   const el = e.target.closest("[data-action]");
   if(!el) return;
   const act = el.dataset.action;
@@ -1474,8 +1592,9 @@ document.body.addEventListener("click", (e) => {
     scheduleSave(); closeModal(); render();
   }
   else if(act === "open-audit" || act === "open-report"){
-    const rec = cache.find(a => a.id === el.dataset.id);
+    let rec = cache.find(a => a.id === el.dataset.id);
     if(!rec) return;
+    if(db){ const complet = await dbGet(el.dataset.id); if(complet) rec = complet; }
     rec.actions = rec.actions || {};
     current = rec;
     if(act === "open-report"){ state.view = "report"; render(); return; }
@@ -1498,13 +1617,20 @@ document.body.addEventListener("click", (e) => {
     if(!confirm("Supprimer définitivement l'audit « " + (rec.restaurant || "") + " » et ses photos ?")) return;
     dbDel(rec.id).then(() => { cache = cache.filter(a => a.id !== rec.id); renderList(); toast("Audit supprimé"); }).catch(console.error);
   }
-  else if(act === "export-json") exportJSON();
+  else if(act === "cloud-sync"){
+    toast("Synchronisation…");
+    cloudToutSynchro()
+      .then((r) => { toast("🔄 Synchronisé : " + r.pousses + " envoyé(s), " + r.importes + " importé(s) ✓"); renderList(); })
+      .catch((e) => toast("Erreur : " + e.message));
+  }
+  else if(act === "export-json"){ exportJSON().catch((e) => toast("Erreur : " + e.message)); }
   else if(act === "import-json") document.getElementById("importInput").click();
-  else if(act === "back-home"){ if(db){ dbAll().then(list => { cache = list; state.view = "list"; render(); }).catch(() => renderList()); } else renderList(); }
+  else if(act === "back-home"){ if(db){ dbAllLege().then(list => { cache = list; state.view = "list"; render(); }).catch(() => renderList()); } else renderList(); }
   else if(act === "goto-section"){ state.sec = parseInt(el.dataset.i, 10); state.autoJump = true; renderAudit(); }
   else if(act === "answer"){
     const qid = el.dataset.qid, v = el.dataset.v;
     const card = el.closest(".qcard");
+    if(!current.startedAt) current.startedAt = Date.now();
     if(current.answers[qid] === v) delete current.answers[qid];
     else current.answers[qid] = v;
     card.querySelectorAll(".seg .b").forEach(b => b.classList.toggle("sel", b.dataset.v === current.answers[qid]));
@@ -1533,6 +1659,8 @@ document.body.addEventListener("click", (e) => {
         setTimeout(() => { if(state.view === "audit") renderAudit(); }, 300);
       }
     }
+    const gsc = globalStats(current);
+    if(gsc.done === TOTAL_Q && !current.completedAt) current.completedAt = Date.now();
   }
   else if(act === "add-photo"){
     const inp = document.getElementById("photoInput");
@@ -1555,8 +1683,9 @@ document.body.addEventListener("click", (e) => {
   else if(act === "share-report") shareReport();
   else if(act === "export-csv") exportCSV();
   else if(act === "cloud-save"){
-    const rec = cache.find((a) => a.id === el.dataset.id);
+    let rec = cache.find((a) => a.id === el.dataset.id);
     if(!rec) return;
+    if(db){ const complet = await dbGet(el.dataset.id); if(complet) rec = complet; }
     toast("Sauvegarde en ligne…");
     cloudSauver(rec)
       .then(() => { dbPut(rec).catch(() => {}); renderList(); })
@@ -1575,7 +1704,7 @@ document.body.addEventListener("click", (e) => {
       .then(async (audit) => {
         audit.actions = audit.actions || {};
         await dbPut(audit);
-        cache = await dbAll();
+        cache = await dbAllLege();
         closeModal();
         renderList();
         toast("Audit importé depuis le Drive ✓");
@@ -1672,9 +1801,44 @@ document.body.addEventListener("click", (e) => {
     scheduleSave(); renderAudit();
     toast("Tout pré-coché Oui — corrigez les points Non 👎");
   }
+  else if(act === "filtre"){ state.filtre = el.dataset.v; renderAudit(); }
+  else if(act === "dictee"){
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if(!SR){ toast("Dictée non disponible sur ce navigateur"); return; }
+    const qid = el.dataset.qid;
+    if(window._dictee && window._dictee.qid === qid){ window._dictee.rec.stop(); window._dictee = null; el.classList.remove("ecoute"); return; }
+    if(window._dictee && window._dictee.btn) window._dictee.btn.classList.remove("ecoute");
+    const card = el.closest(".qcard");
+    const note = card.querySelector(".note");
+    note.classList.remove("hide");
+    const rec = new SR();
+    rec.lang = "fr-FR"; rec.interimResults = false; rec.continuous = true;
+    el.classList.add("ecoute");
+    window._dictee = { qid, rec, btn: el };
+    rec.onresult = (ev) => {
+      let texte = "";
+      for(let i = ev.resultIndex; i < ev.results.length; i++){
+        if(ev.results[i].isFinal) texte += ev.results[i][0].transcript;
+      }
+      if(texte){
+        note.value = note.value ? note.value + " " + texte.trim() : texte.trim();
+        if(current){ current.notes[qid] = note.value; scheduleSave(); }
+      }
+    };
+    rec.onerror = () => { el.classList.remove("ecoute"); toast("Dictée interrompue — réessayez"); };
+    rec.onend = () => { el.classList.remove("ecoute"); if(window._dictee && window._dictee.qid === qid) window._dictee = null; };
+    try{ rec.start(); }catch(e){ el.classList.remove("ecoute"); toast("Dictée indisponible"); }
+  }
   else if(act === "fq"){
     state.fq = Math.max(0, Math.min(SECTIONS[state.sec].questions.length - 1, state.fq + parseInt(el.dataset.d, 10)));
     renderAudit();
+  }
+  else if(act === "vetocrit"){
+    const r = reglages();
+    r.vetocrit = el.dataset.v;
+    saveReglages(r);
+    el.parentNode.querySelectorAll(".vetochip").forEach((b) => b.classList.toggle("sel", b.dataset.v === r.vetocrit));
+    toast("Règle critique : " + el.textContent);
   }
   else if(act === "statut"){
     const qid = el.dataset.qid;
@@ -1739,6 +1903,12 @@ document.body.addEventListener("change", (e) => {
     saveReglages(r);
     toast(t.checked ? "Mode focus activé ✓" : "Mode focus désactivé");
   }
+  else if(t.classList && t.classList.contains("mesv")){
+    if(!current.mesures) current.mesures = {};
+    current.mesures[t.dataset.qid] = t.value;
+    scheduleSave();
+    appliquerMesure(t.dataset.qid);
+  }
   else if(t.id === "fCleCloud"){
     const r = reglages();
     r.cle = t.value.trim();
@@ -1754,6 +1924,19 @@ document.body.addEventListener("change", (e) => {
 });
 
 // Sélecteur de photos
+function appliquerMesure(qid){
+  const q = SECTIONS.flatMap((x) => x.questions).find((x) => x.id === qid);
+  const m = q && q.mesure;
+  if(!m || !current) return;
+  const v = parseFloat(String(current.mesures[qid] || "").replace(",", "."));
+  if(isNaN(v)) return;
+  const conforme = m.sens === "min" ? v >= m.seuil : v <= m.seuil;
+  current.answers[qid] = conforme ? "oui" : "non";
+  let note = (current.notes[qid] || "").replace(/\s*—?\s*Mesuré\s*:\s*[^—]*$/i, "").trim();
+  note = (note ? note + " — " : "") + "Mesuré : " + v.toLocaleString("fr-FR") + " " + m.unite + (conforme ? "" : " (limite " + m.seuil + " " + m.unite + ")");
+  current.notes[qid] = note;
+  scheduleSave(); renderAudit();
+}
 document.getElementById("photoInput").addEventListener("change", (e) => {
   const files = Array.from(e.target.files || []);
   if(files.length && e.target.dataset.qid) addPhotos(e.target.dataset.qid, files);
@@ -1813,7 +1996,7 @@ overlay.addEventListener("click", (e) => {
       Ouvrez ce fichier dans Safari ou Chrome.</div></div>`;
     return;
   }
-  cache = await dbAll();
+  cache = await dbAllLege();
   cache.forEach((a) => { a.actions = a.actions || {}; });
   appliquerGrillePerso();
   renderList();
