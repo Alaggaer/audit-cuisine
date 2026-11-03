@@ -800,7 +800,6 @@ function qCardHtml(q, num, audit){
   const photos = audit.photos[q.id] || [];
   const act = (audit.actions || {})[q.id] || {};
   const defaut = audit.answers[q.id] === (q.inv ? "oui" : "non");
-  const statutFait = act.statut === "fait";
   const rem = (audit.rappels || {})[q.id];
   const echeances = [["Immédiat", 0], ["48 h", 2], ["7 jours", 7], ["Prochain audit", "audit"]];
   const numSec = state.sec + 1;
@@ -835,15 +834,10 @@ function qCardHtml(q, num, audit){
       ${tagsList.map((t) => `<button class="tag" data-action="tag" data-qid="${q.id}" data-t="${esc(t)}">${esc(t)}</button>`).join("")}
     </div>
     <div class="actrow ${defaut ? "" : "hide"}">
-      <div class="chipgrp"><span class="chiplab">Qui :</span>
-        ${["Manager", "Cuisine", "Maintenance"].map((p) =>
-          `<button class="qchip ${act.qui === p ? "sel" : ""}" data-action="act-qui" data-qid="${q.id}" data-v="${p}">${p}</button>`).join("")}
-      </div>
       <div class="chipgrp"><span class="chiplab">Quand :</span>
         ${echeances.map(([lab, n]) =>
           `<button class="qchip ${act.echeance === lab ? "sel" : ""}" data-action="act-quand" data-qid="${q.id}" data-lab="${lab}" data-n="${n}">${lab}</button>`).join("")}
       </div>
-      <button class="actstatut ${statutFait ? "fait" : ""}" data-action="statut" data-qid="${q.id}">${statutFait ? "✓ Fait" : "À faire"}</button>
     </div>
     <div class="phrow" id="ph-${q.id}">
       ${photos.map((p, i) => `
@@ -1017,7 +1011,6 @@ function renderReport(){
 
   let nc = "";
   let ncCount = 0;
-  let aFaire = 0, aFait = 0;
   SECTIONS.forEach((s, i) => {
     const items = s.questions.filter(q => audit.answers[q.id] === (q.inv ? "oui" : "non"));
     if(!items.length) return;
@@ -1027,27 +1020,17 @@ function renderReport(){
       const photos = audit.photos[q.id] || [];
       const note = audit.notes[q.id] || "";
       const act = (audit.actions || {})[q.id] || {};
-      const fait = act.statut === "fait";
       const recidive = !!(audit.rappels || {})[q.id];
-      if(act.qui || act.echeance || act.quand || act.statut) { fait ? aFait++ : aFaire++; }
       nc += `<div class="nc-item">
         <p>${esc(q.t)}${recidive ? `<span class="recidive">🔥 RÉCIDIVE — non corrigé depuis l'audit précédent</span>` : ""}</p>
         ${note ? `<p class="nc-note">📝 ${esc(note)}</p>` : ""}
-        ${(act.qui || act.echeance || act.quand || act.statut) ? `<p class="nc-note">📌 ${esc(act.qui || "—")} · ${esc(act.echeance || (act.quand ? "pour le " + fmtDate(act.quand) : "—"))} · <b>${fait ? "FAIT" : "À FAIRE"}</b></p>` : ""}
+        ${(act.echeance || act.quand) ? `<p class="nc-note">📌 À traiter : ${esc(act.echeance || (act.quand ? "pour le " + fmtDate(act.quand) : "—"))}</p>` : ""}
         ${q.crit && !photos.length ? `<p class="nc-note" style="background:#fff7ed; color:#9a3412;">📸 Photo recommandée pour étayer cette non-conformité critique</p>` : ""}
         ${photos.length ? `<div class="nc-photos">${photos.map((p, j) => `<img src="${p}" data-action="view-photo" data-qid="${q.id}" data-i="${j}" alt="photo">`).join("")}</div>` : ""}
       </div>`;
     }
     nc += `</div>`;
   });
-
-  const planBloc = ncCount ? `
-    <div class="nc-sec"><h2 style="font-size:18px; margin:22px 0 2px;">📋 Plan d'action</h2>
-    <div class="card">
-      <div class="pl-item"><span>Actions à faire</span><span style="flex:1;"></span><span class="pl-statut" style="background:#fee2e2; color:#991b1b;">${aFaire}</span></div>
-      <div class="pl-item"><span>Actions terminées</span><span style="flex:1;"></span><span class="pl-statut" style="background:#dcfce7; color:#166534;">${aFait}</span></div>
-      <p class="meta" style="margin:8px 2px 0;">Les responsables et échéances se saisissent sous chaque point « Non » dans l'audit. Le statut se bascule d'un clic.</p>
-    </div></div>` : "";
 
   app.innerHTML = `
   <div class="topbar noprint"><div class="tb-in">
@@ -1084,7 +1067,6 @@ function renderReport(){
     </div>
     ${ncCount ? `<div class="nc-sec"><h2 style="font-size:18px; margin:22px 0 2px;">❌ ${ncCount} point(s) à améliorer</h2>${nc}</div>`
               : `<div class="rep-ok">🎉 Aucun point « Non » : tout est conforme !</div>`}
-    ${planBloc}
     <div class="card">
       <h3>✍️ Signatures</h3>
       <div class="sigrow">
@@ -1213,6 +1195,285 @@ function openViewer(qid, i){
     </div></div>`;
   overlay.style.display = "block";
 }
+function download(blob, name){
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 400);
+}
+function safeName(s){ return String(s || "audit").replace(/[^\w\- àâäéèêëîïôöùûüç]/gi, "").replace(/\s+/g, "-"); }
+
+async function exportJSON(){
+  const complet = db ? await dbAll() : cache;
+  const data = JSON.stringify({ app:"audit-cuisine", version:1, exports:complet }, null, 1);
+  download(new Blob([data], { type:"application/json" }), "audit-cuisine-sauvegarde-" + todayISO() + ".json");
+  toast("Sauvegarde téléchargée ✓");
+}
+function exportCSV(){
+  if(!current) return;
+  const lines = ["Restaurant;Date;Auditeur;Section;Question;Reponse;Commentaire;Nb photos"];
+  SECTIONS.forEach(s => s.questions.forEach(q => {
+    const a = current.answers[q.id] || "";
+    const rep = a === "oui" ? "Oui" : a === "non" ? "Non" : a === "na" ? "N/A" : "";
+    lines.push([
+      current.restaurant, current.date, current.auditor, s.title, q.t, rep,
+      (current.notes[q.id] || "").replace(/[\r\n;]+/g, " "),
+      (current.photos[q.id] || []).length
+    ].map(v => String(v == null ? "" : v)).join(";"));
+  }));
+  const gs = globalStats(current);
+  lines.push("");
+  lines.push("SCORE GLOBAL;;;" + (gs.score === null ? "" : Math.round(gs.score) + " %") + ";;;" + interp(gs.score).label);
+  download(new Blob(["\uFEFF" + lines.join("\r\n")], { type:"text/csv;charset=utf-8" }),
+    "audit-" + safeName(current.restaurant) + "-" + current.date + ".csv");
+}
+function buildReportHtml(audit){
+  const gs = globalStats(audit);
+  const ic = interp(gs.score);
+  const logo = reglages().logo;
+  let body = "";
+  SECTIONS.forEach((s, i) => {
+    const st = gs.parts[i];
+    const col = st.score === null ? "#94a3b8" : interp(st.score).color;
+    body += `<tr><td>${esc(s.title)}</td><td style="color:${col};font-weight:700;">${st.score === null ? "—" : Math.round(st.score) + " %"}</td>
+      <td>${st.oui} ✓ / ${st.non} ✗${st.na ? " / " + st.na + " N/A" : ""}</td></tr>`;
+  });
+  let details = "";
+  let planLignes = "";
+  SECTIONS.forEach(s => s.questions.forEach(q => {
+    if(audit.answers[q.id] !== (q.inv ? "oui" : "non")) return;
+    const photos = audit.photos[q.id] || [];
+    const act = (audit.actions || {})[q.id] || {};
+    const recidive = !!(audit.rappels || {})[q.id];
+    details += `<div class="nc"><b>✗ ${esc(q.t)}${recidive ? ` <span style="background:#7c2d12;color:#fff;border-radius:6px;padding:2px 8px;font-size:11px;">🔥 RÉCIDIVE</span>` : ""}</b>
+      ${audit.notes[q.id] ? `<div class="nn">${esc(audit.notes[q.id])}</div>` : ""}
+      ${(act.echeance || act.quand) ? `<div class="nn">📌 À traiter : ${esc(act.echeance || (act.quand ? "pour le " + fmtDate(act.quand) : "—"))}</div>` : ""}
+      ${photos.length ? `<div>${photos.map(p => `<img src="${p}">`).join("")}</div>` : ""}</div>`;
+    if(act.echeance || act.quand){
+      planLignes += `<tr><td>${esc(q.t)}</td><td>${esc(act.echeance || (act.quand ? fmtDate(act.quand) : "—"))}</td></tr>`;
+    }
+  }));
+  const logoHtml = logo ? `<img src="${logo}" style="max-height:70px; display:block; margin:0 auto 10px;">` : "";
+  return `<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8">
+  <title>Audit ${esc(audit.restaurant)} — ${esc(audit.date)}</title>
+  <style>
+    body{font-family:-apple-system,"Segoe UI",Roboto,Arial,sans-serif;color:#0f172a;max-width:760px;margin:24px auto;padding:0 16px;}
+    h1{font-size:24px;margin:0 0 4px;} .sub{color:#64748b;font-size:14px;margin-bottom:20px;}
+    .score{font-size:44px;font-weight:800;color:${ic.color};} .ilabel{display:inline-block;background:${ic.color};color:#fff;
+    padding:5px 14px;border-radius:999px;font-weight:700;font-size:14px;}
+    table{width:100%;border-collapse:collapse;margin:18px 0;font-size:14px;}
+    td,th{border-bottom:1px solid #e2e8f0;padding:8px 6px;text-align:left;}
+    th{background:#f1f5f9;}
+    .nc{border-left:4px solid #dc2626;background:#fff;border-radius:8px;padding:10px 12px;margin:10px 0;font-size:14px;
+    break-inside:avoid;border:1px solid #e2e8f0;border-left-width:4px;}
+    .nn{background:#fffbeb;color:#7c2d12;border-radius:6px;padding:6px 9px;margin-top:6px;font-size:13px;}
+    .nc img{width:110px;height:110px;object-fit:cover;border-radius:6px;margin:8px 8px 0 0;border:1px solid #e2e8f0;}
+    .legend{color:#64748b;font-size:12px;margin-top:22px;}
+    @media print{ body{margin:8mm auto;} }
+  </style></head><body>
+  ${logoHtml}
+  <h1>🧑‍🍳 Audit Cuisine — ${esc(audit.restaurant || "")}</h1>
+  <div class="sub">${esc(audit.date ? fmtDate(audit.date) : "")} · Auditeur : ${esc(audit.auditor || "—")} · ${gs.done}/${TOTAL_Q} questions traitées
+  ${(audit.startedAt && audit.completedAt) ? ` · ⏱️ de ${new Date(audit.startedAt).toLocaleTimeString("fr-FR", { hour:"2-digit", minute:"2-digit" })} à ${new Date(audit.completedAt).toLocaleTimeString("fr-FR", { hour:"2-digit", minute:"2-digit" })}` : ""}</div>
+  <div><span class="score">${gs.score === null ? "—" : Math.round(gs.score) + " %"}</span> &nbsp;<span class="ilabel">${ic.label}</span></div>
+  ${gs.veto ? `<p style="color:#b91c1c;font-weight:700;font-size:13px;">⚖️ ${esc(gs.veto)}${gs.scoreBrut !== null ? " — score brut : " + Math.round(gs.scoreBrut) + " %" : ""}</p>` : ""}
+  <table><tr><th>Section</th><th>Score</th><th>Détail</th></tr>${body}</table>
+  ${criticalsNC(audit).length ? `<div style="background:#dc2626;color:#fff;border-radius:10px;padding:10px 14px;font-weight:800;margin:14px 0;">🚨 ${criticalsNC(audit).length} non-conformité(s) critique(s) HACCP — action immédiate requise</div>` : ""}
+  ${details ? `<h2 style="font-size:18px;">❌ Points à améliorer</h2>${details}` : `<p>✅ Aucun point « Non » relevé.</p>`}
+  ${planLignes ? `<h2 style="font-size:18px;">📋 Plan d'action</h2>
+  <table><tr><th>Point</th><th>Échéance</th></tr>${planLignes}</table>` : ""}
+  ${(audit.signatures && (audit.signatures.auditeur || audit.signatures.responsable)) ? `
+  <div style="display:flex; gap:24px; margin-top:18px; flex-wrap:wrap;">
+    ${audit.signatures.auditeur ? `<div><div style="font-size:12px;color:#64748b;">Signature auditeur</div><img src="${audit.signatures.auditeur}" style="max-width:230px; border-bottom:1px solid #cbd5e1;"></div>` : ""}
+    ${audit.signatures.responsable ? `<div><div style="font-size:12px;color:#64748b;">Signature responsable</div><img src="${audit.signatures.responsable}" style="max-width:230px; border-bottom:1px solid #cbd5e1;"></div>` : ""}
+  </div>` : ""}
+  <p class="legend">Score global = moyenne des ${SECTIONS.length} scores de section. Barème : 95–100 Excellent · 90–94 Très bien · 80–89 Conforme ·
+  70–79 À améliorer · 60–69 Insuffisant · &lt;60 Audit à refaire d'urgence.<br>Rapport généré le ${new Date().toLocaleString("fr-FR")}.</p>
+  </body></html>`;
+}
+async function shareReport(){
+  if(!current) return;
+  const html = buildReportHtml(current);
+  const name = "audit-" + safeName(current.restaurant) + "-" + current.date + ".html";
+  try{
+    const file = new File([html], name, { type:"text/html" });
+    if(navigator.canShare && navigator.canShare({ files:[file] })){
+      await navigator.share({ files:[file], title:"Audit " + (current.restaurant || "") });
+      return;
+    }
+  }catch(e){ if(e && e.name === "AbortError") return; }
+  download(new Blob([html], { type:"text/html" }), name);
+  toast("Rapport téléchargé — envoyez-le par mail ou WhatsApp");
+}
+async function cloudPost(cle, audit){
+  const resp = await fetch(RELAIS_CLOUD, { method:"POST", body: JSON.stringify({ cle, audit }) });
+  const txt = await resp.text();
+  let data;
+  try{ data = JSON.parse(txt); }
+  catch(e){ throw new Error("Réponse du relais invalide — mettez à jour le relais en version 3"); }
+  if(data.erreur) throw new Error(data.erreur);
+  return data;
+}
+async function cloudSauver(audit, silencieux){
+  const r = reglages();
+  if(!r.cle) throw new Error("Renseignez la clé du relais dans ⚙️ Réglages");
+  await cloudPost(r.cle, audit);
+  audit.cloudOk = Date.now();
+  if(!silencieux) toast("☁️ Sauvegardé dans votre Drive ✓");
+}
+async function cloudLister(){
+  const r = reglages();
+  if(!r.cle) throw new Error("Renseignez la clé du relais dans ⚙️ Réglages");
+  const resp = await fetch(RELAIS_CLOUD + "?cle=" + encodeURIComponent(r.cle) + "&sauvegardes=1");
+  const data = await resp.json();
+  if(data.erreur) throw new Error(data.erreur);
+  return data.audits || [];
+}
+async function cloudCharger(id){
+  const r = reglages();
+  if(!r.cle) throw new Error("Renseignez la clé du relais dans ⚙️ Réglages");
+  const resp = await fetch(RELAIS_CLOUD + "?cle=" + encodeURIComponent(r.cle) + "&charger=" + encodeURIComponent(id));
+  const data = await resp.json();
+  if(data.erreur) throw new Error(data.erreur);
+  return data.audit;
+}
+
+/* ---------- Suivi : évolution / comparaison / groupe ---------- */
+function renderSuivi(){
+  if(!state.suiviResto){ const r = restosUniques(); state.suiviResto = r[0] || null; }
+  const tab = state.suiviTab;
+  let corps = "";
+  const chipsRestos = restosUniques().map((r) =>
+    `<button class="chip ${r === state.suiviResto ? "active" : ""}" data-action="suivi-resto" data-r="${esc(r)}">${esc(r)}</button>`).join("");
+
+  if(tab === "evolution"){
+    const audits = cache.filter((a) => (a.restaurant || "").trim() === state.suiviResto)
+      .sort((a, b) => (a.date || "").localeCompare(b.date || "") || (a.createdAt || 0) - (b.createdAt || 0));
+    if(!audits.length){
+      corps = `<div class="navrow">${chipsRestos}</div><div class="card"><div class="empty">Aucun audit pour ce restaurant.</div></div>`;
+    } else {
+      const serie = audits.map((a) => { const g = globalStats(a);
+        return { label:dateCourt(a.date), val:g.score === null ? null : Math.round(g.score * 10) / 10 }; });
+      const courbe = `<div class="card"><h3>Score global dans le temps</h3>${svgLigne(serie, (v) => Math.round(v) + " %")}</div>`;
+      let delta = "";
+      if(audits.length >= 2){
+        const anc = audits[audits.length - 2], rec = audits[audits.length - 1];
+        const rows = SECTIONS.map((s) => {
+          const s1 = sectionStats(s, anc).score, s2 = sectionStats(s, rec).score;
+          if(s1 === null || s2 === null) return "";
+          const d = s2 - s1;
+          return `<div class="pl-item"><span style="flex:1;">${s.icon} ${esc(s.short)}</span>
+            <span><b>${Math.round(s1)} %</b> → <b>${Math.round(s2)} %</b></span>
+            <span class="${d >= 0 ? "up" : "down"}" style="font-weight:800;">${d >= 0 ? "▲" : "▼"} ${Math.abs(Math.round(d))}</span></div>`;
+        }).join("");
+        delta = `<div class="card"><h3>Évolution par section</h3><p class="meta" style="margin:0 2px 8px;">${fmtDate(anc.date)} → ${fmtDate(rec.date)}</p>${rows}</div>`;
+      }
+      const liste = audits.map((a) => { const g = globalStats(a); const ic2 = interp(g.score);
+        return `<div class="pl-item"><span style="flex:1;">${fmtDate(a.date)}${a.suiviDe ? " 🔁" : ""}</span><span class="meta">${g.done}/${TOTAL_Q} répondues</span>
+          <span class="scorechip" style="background:${ic2.color};">${g.score === null ? "—" : Math.round(g.score) + "%"}</span></div>`; }).join("");
+      corps = `<div class="navrow">${chipsRestos}</div>` + courbe + delta +
+        `<div class="card"><h3>${audits.length} audit(s) — ${esc(state.suiviResto || "")}</h3>${liste}</div>`;
+    }
+  }
+  else if(tab === "comparaison"){
+    const restos = restosUniques();
+    const dernierScore = (r) => {
+      const list = cache.filter((a) => (a.restaurant || "").trim() === r)
+        .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+      return list.length ? globalStats(list[0]).score : null;
+    };
+    const barres = restos.map((r) => ({ label:r, val:dernierScore(r) === null ? null : Math.round(dernierScore(r)) }))
+      .sort((a, b) => (b.val === null ? -1 : b.val) - (a.val === null ? -1 : a.val));
+    corps = `<div class="card"><h3>Dernier score par restaurant</h3>${svgBarresH(barres, (v) => Math.round(v) + " %")}</div>
+      <div class="card">${restos.map((r) => {
+        const audits = cache.filter((a) => (a.restaurant || "").trim() === r);
+        const sc = dernierScore(r);
+        const ic2 = interp(sc);
+        return `<div class="pl-item" data-action="suivi-resto" data-r="${esc(r)}" style="cursor:pointer;">
+          <span style="flex:1;">${esc(r)}</span><span class="meta">${audits.length} audit(s) · touchez pour l'évolution</span>
+          <span class="scorechip" style="background:${ic2.color};">${sc === null ? "—" : Math.round(sc) + "%"}</span></div>`;
+      }).join("")}</div>`;
+  }
+  else if(tab === "groupe"){
+    const moisMap = {};
+    cache.forEach((a) => { const k = (a.date || "").slice(0, 7); if(k) moisMap[k] = true; });
+    const mois = Object.keys(moisMap).sort().reverse();
+    if(!state.grpMois || !mois.includes(state.grpMois)) state.grpMois = mois[0] || null;
+    const chipsMois = mois.map((k) => {
+      const d = new Date(k + "-01T12:00:00");
+      return `<button class="chip ${k === state.grpMois ? "active" : ""}" data-action="grp-mois" data-k="${k}">${d.toLocaleDateString("fr-FR", { month:"long", year:"numeric" })}</button>`;
+    }).join("");
+    const audits = cache.filter((a) => (a.date || "").slice(0, 7) === state.grpMois);
+    const scores = audits.map((a) => globalStats(a).score).filter((s) => s !== null);
+    const moy = scores.length ? Math.round(scores.reduce((x, y) => x + y, 0) / scores.length) : null;
+    const parResto = {};
+    audits.forEach((a) => {
+      const r = (a.restaurant || "?").trim();
+      if(!parResto[r] || (a.updatedAt || 0) > (parResto[r].updatedAt || 0)) parResto[r] = a;
+    });
+    const barres = Object.keys(parResto).map((r) => {
+      const g = globalStats(parResto[r]);
+      return { label:r, val:g.score === null ? null : Math.round(g.score) };
+    }).sort((a, b) => (b.val === null ? -1 : b.val) - (a.val === null ? -1 : a.val));
+    const faib = {};
+    audits.forEach((a) => SECTIONS.forEach((s) => {
+      const st = sectionStats(s, a);
+      if(st.non > 0) faib[s.short] = (faib[s.short] || 0) + st.non;
+    }));
+    const topFaibles = Object.keys(faib).map((k) => ({ label:k, val:faib[k] })).sort((a, b) => b.val - a.val).slice(0, 3);
+    corps = `<div class="navrow">${chipsMois}</div>
+      <div class="card"><h3>${audits.length} audit(s) — moyenne du mois : <span style="color:var(--brand);">${moy === null ? "—" : moy + " %"}</span></h3>
+      ${svgBarresH(barres, (v) => Math.round(v) + " %")}</div>
+      ${topFaibles.length ? `<div class="card"><h3>Points « Non » les plus fréquents du mois</h3>${svgBarresH(topFaibles, (v) => String(v))}</div>` : ""}`;
+  }
+
+  app.innerHTML = `
+  <div class="topbar noprint"><div class="tb-in">
+    <button class="tb-back" data-action="back-home">←</button>
+    <div class="tb-title"><b>📊 Suivi des audits</b><small>${cache.length} audit(s) sur cet appareil</small></div>
+  </div></div>
+  <div class="chips noprint">
+    <button class="chip ${tab === "evolution" ? "active" : ""}" data-action="suivi-tab" data-t="evolution">📈 Évolution</button>
+    <button class="chip ${tab === "comparaison" ? "active" : ""}" data-action="suivi-tab" data-t="comparaison">🏆 Comparaison</button>
+    <button class="chip ${tab === "groupe" ? "active" : ""}" data-action="suivi-tab" data-t="groupe">👥 Groupe</button>
+  </div>
+  <div class="wrap">${corps}</div>`;
+  window.scrollTo(0, 0);
+}
+
+/* ---------- Éditeur de grille personnalisable ---------- */
+function renderGrille(){
+  const grille = reglages().grille || [];
+  if(state.grilleSec >= SECTIONS.length) state.grilleSec = 0;
+  const sec = SECTIONS[state.grilleSec];
+  const persos = grille.filter((p) => p.sec === state.grilleSec);
+  const chips = SECTIONS.map((s, i) =>
+    `<button class="chip ${i === state.grilleSec ? "active" : ""}" data-action="grille-sec" data-i="${i}">${s.icon} ${esc(s.short)}</button>`).join("");
+  app.innerHTML = `
+  <div class="topbar noprint"><div class="tb-in">
+    <button class="tb-back" data-action="nav" data-v="list">←</button>
+    <div class="tb-title"><b>📝 Grille personnalisable</b><small>Vos questions s'ajoutent en fin de section</small></div>
+  </div></div>
+  <div class="chips noprint">${chips}</div>
+  <div class="wrap">
+    <div class="card">
+      <h3>${sec.icon} ${esc(sec.title)}</h3>
+      ${persos.length ? persos.map((p) => `
+        <div class="cqrow"><span style="flex:1; font-size:14px;">${esc(p.t)}</span>
+        <button class="cqdel" data-action="grille-del" data-id="${esc(p.id)}" aria-label="Supprimer">✕</button></div>`).join("")
+        : `<p class="meta">Aucune question personnalisée dans cette section.</p>`}
+      <div class="cqrow">
+        <input id="cqText" placeholder="Nouvelle question…" autocomplete="off">
+        <button class="btn primary" data-action="grille-add" style="padding:10px 14px; min-height:42px;">＋</button>
+      </div>
+      <p class="meta">Les questions d'origine ne sont pas modifiables (vos audits restent comparables d'un mois à l'autre). Les questions ajoutées apparaissent en fin de section, dans tous les audits.</p>
+    </div>
+  </div>`;
+  window.scrollTo(0, 0);
+}
+
 let annCv = null, annCtx = null, annBase = null, annOutil = "stylo", annTraits = [], annTrace = null;
 function annRedessiner(){
   annCtx.clearRect(0, 0, annCv.width, annCv.height);
@@ -1519,13 +1780,6 @@ document.body.addEventListener("click", async (e) => {
     current.notes[el.dataset.qid] = note.value;
     scheduleSave();
   }
-  else if(act === "act-qui"){
-    const act2 = current.actions[el.dataset.qid] = current.actions[el.dataset.qid] || {};
-    act2.qui = act2.qui === el.dataset.v ? "" : el.dataset.v;
-    scheduleSave();
-    el.parentElement.querySelectorAll(".qchip").forEach((b) => b.classList.remove("sel"));
-    el.classList.toggle("sel", !!act2.qui);
-  }
   else if(act === "act-quand"){
     const act2 = current.actions[el.dataset.qid] = current.actions[el.dataset.qid] || {};
     const lab = el.dataset.lab, n = el.dataset.n;
@@ -1644,14 +1898,6 @@ document.body.addEventListener("click", async (e) => {
     saveReglages(r);
     el.parentNode.querySelectorAll(".vetochip").forEach((b) => b.classList.toggle("sel", b.dataset.v === r.vetocrit));
     toast("Règle critique : " + el.textContent);
-  }
-  else if(act === "statut"){
-    const qid = el.dataset.qid;
-    const act2 = current.actions[qid] = current.actions[qid] || {};
-    act2.statut = act2.statut === "fait" ? "afaire" : "fait";
-    scheduleSave();
-    el.classList.toggle("fait", act2.statut === "fait");
-    el.textContent = act2.statut === "fait" ? "✓ Fait" : "À faire";
   }
   else if(act === "suivi-tab"){ state.suiviTab = el.dataset.t; renderSuivi(); }
   else if(act === "suivi-resto"){ state.suiviResto = el.dataset.r; state.suiviTab = "evolution"; renderSuivi(); }

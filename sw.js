@@ -1,5 +1,5 @@
 /* Service worker : met l'application en cache pour fonctionner hors-ligne. */
-const CACHE = "audit-cuisine-v13";
+const CACHE = "audit-cuisine-v14";
 const ASSETS = ["./", "./index.html", "./manifest.json", "./icon.svg", "./icon-512.png"];
 
 self.addEventListener("install", (e) => {
