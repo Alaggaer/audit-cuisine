@@ -729,7 +729,7 @@ function renderList(){
     <div class="card">
       <div class="card-head" data-action="open-audit" data-id="${a.id}">
         <div style="flex:1; min-width:0;">
-          <p class="card-title">${esc(a.restaurant || "Audit sans nom")}${nbCrit ? ` <span style="color:var(--bad);">⚠️ critique</span>` : ""}${a.suiviDe ? ` <span style="color:var(--warn); font-size:12px;">🔁 suivi</span>` : ""}</p>
+          <p class="card-title">${esc(a.restaurant || "Audit sans nom")}${nbCrit ? ` <span style="color:var(--bad);">⚠️ critique</span>` : ""}${a.suiviDe ? ` <span style="color:var(--warn); font-size:12px;">🔁 contre-visite</span>` : ""}</p>
           <div class="meta">${fmtDate(a.date)} · ${gs.done}/${TOTAL_Q} répondues${a.cloudOk ? " · ☁️" : ""}</div>
           <div class="bar"><i style="width:${gs.pct}%; background:${ic.color};"></i></div>
         </div>
@@ -738,7 +738,7 @@ function renderList(){
       <div class="row-actions">
         <button class="btn ghost" data-action="open-audit" data-id="${a.id}">${gs.done < TOTAL_Q ? "✏️ Continuer" : "📂 Ouvrir"}</button>
         <button class="btn ghost" data-action="open-report" data-id="${a.id}">📊 Rapport</button>
-        <button class="btn ghost" data-action="suivi-audit" data-id="${a.id}">🔁 Suivi</button>
+        <button class="btn ghost" data-action="suivi-audit" data-id="${a.id}">🔁 Contre-visite</button>
         <button class="btn ghost" data-action="cloud-save" data-id="${a.id}" title="Sauvegarder en ligne">${a.cloudOk ? "☁️✓" : "☁️"}</button>
         <button class="btn ghost" data-action="dup-audit" data-id="${a.id}">⧉ Dupliquer</button>
         <button class="btn danger" data-action="del-audit" data-id="${a.id}">🗑</button>
@@ -1758,7 +1758,7 @@ document.body.addEventListener("click", async (e) => {
       suiviDe:src.id, rappels };
     cache.push(rec);
     dbPut(rec).then(() => {
-      toast("Audit de suivi créé — anciens Non rappelés 🔁");
+      toast("Contre-visite créée — anciens Non rappelés 🔁");
       current = rec; state.view = "audit"; state.sec = 0; state.autoJump = false; state.fq = 0;
       render();
     }).catch(console.error);
