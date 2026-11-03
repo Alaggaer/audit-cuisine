@@ -328,7 +328,9 @@ const SECTIONS = [
     { t:"Les grilles anti-moustiques sont-elles allumées ?" },
     { t:"Le petit matériel de cuisine et la vaisselle sont-ils propres ? (assiette / bac gastro / pince / etc.)" },
     { t:"Le petit matériel de plonge et de stockage sont-ils propres ? (panier à plonge / bac à couverts / saladette / etc.)" },
-    { t:"Clamshell + Clamshell 2 bras (drive)", group:"Les matériels suivants sont-ils propres ?" },
+  ]},
+  { icon:"🔧", title:"Les matériels suivants sont-ils propres ?", short:"Matériels", questions:[
+    { t:"Clamshell + Clamshell 2 bras (drive)" },
     { t:"Lèche-frite" },
     { t:"Friteuse" },
     { t:"La plancha" },
@@ -369,8 +371,17 @@ const SECTIONS = [
     { t:"Les responsables de cuisine font-ils bien le contrôle des postes avant de laisser partir leurs équipes ?" },
   ]},
 ];
-// Identifiants stables
+// Identifiants stables (les réponses des audits existants sont conservées)
 SECTIONS.forEach((s, i) => s.questions.forEach((q, j) => { q.id = "s" + (i+1) + "q" + (j+1); }));
+// Après la scission : les matériels gardent les ids s11q6..s11q23 et le service reste s12
+SECTIONS.forEach((s) => {
+  if(s.title === "Les matériels suivants sont-ils propres ?"){
+    s.questions.forEach((q, j) => { q.id = "s11q" + (j + 6); });
+  }
+  if(s.title.startsWith("L'organisation et le déroulé")){
+    s.questions.forEach((q, j) => { q.id = "s12q" + (j + 1); });
+  }
+});
 let TOTAL_Q = SECTIONS.reduce((a, s) => a + s.questions.length, 0);
 function recalcTotal(){ TOTAL_Q = SECTIONS.reduce((a, s) => a + s.questions.length, 0); }
 
@@ -380,6 +391,13 @@ function saveReglages(r){ localStorage.setItem("audit:reglages", JSON.stringify(
 
 /* ---- Questions personnalisées (ajoutées en fin de section) ---- */
 function appliquerGrillePerso(){
+  const r0 = reglages();
+  if(r0.grille && r0.grille.length && !r0.grilleV2){
+    // ancienne indexation (12 sections) : le service était l'index 11, il est passé à 12
+    r0.grille.forEach((p) => { if(p.sec === 11) p.sec = 12; });
+    r0.grilleV2 = true;
+    saveReglages(r0);
+  }
   const persos = reglages().grille || [];
   SECTIONS.forEach((s) => { s.questions = s.questions.filter((q) => !q.perso); });
   persos.forEach((p) => {
@@ -778,7 +796,6 @@ function renderAudit(){
     let num = 0;
     for(const q of sec.questions){
       num++;
-      if(q.group) cards += `<div class="group-label">${esc(q.group)}</div>`;
       cards += qCardHtml(q, num, audit);
     }
   }
