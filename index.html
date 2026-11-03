@@ -222,6 +222,13 @@
   .mesure span{font-size:12px; font-weight:800; color:#0369a1;}
   .recidive{background:#7c2d12; color:#fff; border-radius:6px; padding:2px 8px; font-size:11px;
     font-weight:800; margin-left:6px; white-space:nowrap;}
+  .up{color:var(--ok);}
+  .down{color:var(--bad);}
+  .navrow{display:flex; gap:6px; overflow-x:auto; padding:8px 2px 4px; scrollbar-width:none;}
+  .navrow::-webkit-scrollbar{display:none;}
+  .navchip,.vetochip{border:1.5px solid var(--line); background:#fff; border-radius:99px;
+    padding:6px 12px; font-size:12.5px; font-weight:700; color:#475569; flex:none;}
+  .navchip.active,.vetochip.sel{background:var(--brand); border-color:var(--brand); color:#fff;}
   @media print{
     .noprint{display:none !important;}
     body{background:#fff;}
@@ -782,7 +789,7 @@ function qCardHtml(q, num, audit){
   const statutFait = act.statut === "fait";
   const rem = (audit.rappels || {})[q.id];
   const echeances = [["Immédiat", 0], ["48 h", 2], ["7 jours", 7], ["Prochain audit", "audit"]];
-  const numSec = (q.id.match(/^s(\d+)/) || [])[1];
+  const numSec = state.sec + 1;
   const tagsList = TAGS_PAR_SECTION[numSec] || TAGS_AUDIT;
   const mesv = (audit.mesures || {})[q.id] || "";
   return `
@@ -863,7 +870,7 @@ function renderAudit(){
       num++;
       const reponse = audit.answers[q.id] || "";
       const nonConforme = reponse === (q.inv ? "oui" : "non");
-      if(state.filtre === "arep" && (reponse === "oui" || reponse === "na")) continue;
+      if(state.filtre === "arep" && reponse !== "") continue;
       if(state.filtre === "nc" && !nonConforme) continue;
       cards += qCardHtml(q, num, audit);
     }
@@ -1007,7 +1014,7 @@ function renderReport(){
       const act = (audit.actions || {})[q.id] || {};
       const fait = act.statut === "fait";
       const recidive = !!(audit.rappels || {})[q.id];
-      if(act.qui || act.quand || act.statut) { fait ? aFait++ : aFaire++; }
+      if(act.qui || act.echeance || act.quand || act.statut) { fait ? aFait++ : aFaire++; }
       nc += `<div class="nc-item">
         <p>${esc(q.t)}${recidive ? `<span class="recidive">🔥 RÉCIDIVE — non corrigé depuis l'audit précédent</span>` : ""}</p>
         ${note ? `<p class="nc-note">📝 ${esc(note)}</p>` : ""}
@@ -1281,7 +1288,7 @@ function buildReportHtml(audit){
     const photos = audit.photos[q.id] || [];
     const act = (audit.actions || {})[q.id] || {};
     const fait = act.statut === "fait";
-    if(act.qui || act.quand || act.statut) { fait ? nbFait++ : nbAFaire++; }
+    if(act.qui || act.echeance || act.quand || act.statut) { fait ? nbFait++ : nbAFaire++; }
     const recidive = !!(audit.rappels || {})[q.id];
     details += `<div class="nc"><b>✗ ${esc(q.t)}${recidive ? ` <span style="background:#7c2d12;color:#fff;border-radius:6px;padding:2px 8px;font-size:11px;">🔥 RÉCIDIVE</span>` : ""}</b>
       ${audit.notes[q.id] ? `<div class="nn">${esc(audit.notes[q.id])}</div>` : ""}
@@ -1638,7 +1645,8 @@ document.body.addEventListener("click", async (e) => {
     const qCourante = SECTIONS[state.sec].questions.find((x) => x.id === qid);
     const nonConforme = current.answers[qid] === (qCourante && qCourante.inv ? "oui" : "non");
     const note = card.querySelector(".note");
-    note.classList.toggle("hide", !(nonConforme || note.value.trim()));
+    const noterow = card.querySelector(".noterow");
+    if(noterow) noterow.classList.toggle("hide", !(nonConforme || note.value.trim()));
     const actrow = card.querySelector(".actrow");
     if(actrow) actrow.classList.toggle("hide", !nonConforme);
     const tags = card.querySelector(".tags");
@@ -1721,8 +1729,9 @@ document.body.addEventListener("click", async (e) => {
   }
   else if(act === "tag"){
     const card = el.closest(".qcard");
+    const noterow = card.querySelector(".noterow");
+    if(noterow) noterow.classList.remove("hide");
     const note = card.querySelector(".note");
-    note.classList.remove("hide");
     note.value = note.value ? note.value + " — " + el.dataset.t : el.dataset.t;
     current.notes[el.dataset.qid] = note.value;
     scheduleSave();
@@ -1731,12 +1740,14 @@ document.body.addEventListener("click", async (e) => {
     const act2 = current.actions[el.dataset.qid] = current.actions[el.dataset.qid] || {};
     act2.qui = act2.qui === el.dataset.v ? "" : el.dataset.v;
     scheduleSave();
+    el.parentElement.querySelectorAll(".qchip").forEach((b) => b.classList.remove("sel"));
     el.classList.toggle("sel", !!act2.qui);
   }
   else if(act === "act-quand"){
     const act2 = current.actions[el.dataset.qid] = current.actions[el.dataset.qid] || {};
     const lab = el.dataset.lab, n = el.dataset.n;
-    if(act2.echeance === lab){ act2.echeance = ""; act2.quand = ""; el.classList.remove("sel"); }
+    el.parentElement.querySelectorAll(".qchip").forEach((b) => b.classList.remove("sel"));
+    if(act2.echeance === lab){ act2.echeance = ""; act2.quand = ""; }
     else {
       act2.echeance = lab;
       act2.quand = n === "audit" ? "" : new Date(Date.now() + parseInt(n, 10) * 86400000).toISOString().slice(0, 10);
@@ -1798,7 +1809,7 @@ document.body.addEventListener("click", async (e) => {
     const sec = SECTIONS[state.sec];
     const nbRepondu = sec.questions.filter((q) => current.answers[q.id]).length;
     if(nbRepondu > 0 && !confirm("Pré-cocher TOUTES les questions de la section en « Oui » ? (" + nbRepondu + " réponse(s) déjà saisies seront remplacées)")) return;
-    sec.questions.forEach((q) => { current.answers[q.id] = "oui"; });
+    sec.questions.forEach((q) => { current.answers[q.id] = q.inv ? "non" : "oui"; });
     scheduleSave(); renderAudit();
     toast("Tout pré-coché Oui — corrigez les points Non 👎");
   }
@@ -1810,8 +1821,9 @@ document.body.addEventListener("click", async (e) => {
     if(window._dictee && window._dictee.qid === qid){ window._dictee.rec.stop(); window._dictee = null; el.classList.remove("ecoute"); return; }
     if(window._dictee && window._dictee.btn) window._dictee.btn.classList.remove("ecoute");
     const card = el.closest(".qcard");
+    const noterow = card.querySelector(".noterow");
+    if(noterow) noterow.classList.remove("hide");
     const note = card.querySelector(".note");
-    note.classList.remove("hide");
     const rec = new SR();
     rec.lang = "fr-FR"; rec.interimResults = false; rec.continuous = true;
     el.classList.add("ecoute");
