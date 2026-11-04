@@ -1324,24 +1324,21 @@ async function cloudPost(cle, audit){
   return data;
 }
 async function cloudSauver(audit, silencieux){
-  const r = reglages();
-  if(!r.cle) throw new Error("Renseignez la clé du relais dans ⚙️ Réglages");
-  await cloudPost(r.cle, audit);
+  const cle = reglages().cle || CLE_CLOUD_DEFAUT;
+  await cloudPost(cle, audit);
   audit.cloudOk = Date.now();
   if(!silencieux) toast("☁️ Sauvegardé dans votre Drive ✓");
 }
 async function cloudLister(){
-  const r = reglages();
-  if(!r.cle) throw new Error("Renseignez la clé du relais dans ⚙️ Réglages");
-  const resp = await fetch(RELAIS_CLOUD + "?cle=" + encodeURIComponent(r.cle) + "&sauvegardes=1");
+  const cle = reglages().cle || CLE_CLOUD_DEFAUT;
+  const resp = await fetch(RELAIS_CLOUD + "?cle=" + encodeURIComponent(cle) + "&sauvegardes=1");
   const data = await resp.json();
   if(data.erreur) throw new Error(data.erreur);
   return data.audits || [];
 }
 async function cloudCharger(id){
-  const r = reglages();
-  if(!r.cle) throw new Error("Renseignez la clé du relais dans ⚙️ Réglages");
-  const resp = await fetch(RELAIS_CLOUD + "?cle=" + encodeURIComponent(r.cle) + "&charger=" + encodeURIComponent(id));
+  const cle = reglages().cle || CLE_CLOUD_DEFAUT;
+  const resp = await fetch(RELAIS_CLOUD + "?cle=" + encodeURIComponent(cle) + "&charger=" + encodeURIComponent(id));
   const data = await resp.json();
   if(data.erreur) throw new Error(data.erreur);
   return data.audit;
@@ -1573,8 +1570,7 @@ function openAnnotateur(qid, i){
   img.src = p;
 }
 async function cloudToutSynchro(){
-  const r = reglages();
-  if(!r.cle) throw new Error("Renseignez la clé du relais dans ⚙️ Réglages");
+  const cle = reglages().cle || CLE_CLOUD_DEFAUT;
   const distants = await cloudLister();
   let pousses = 0, importes = 0;
   const locaux = {};
@@ -1585,7 +1581,7 @@ async function cloudToutSynchro(){
     if(!dist || (a.updatedAt || 0) > majDist){
       let complet = a;
       if(db){ const c = await dbGet(a.id); if(c) complet = c; }
-      await cloudPost(r.cle, complet);
+      await cloudPost(cle, complet);
       pousses++;
     }
   }
