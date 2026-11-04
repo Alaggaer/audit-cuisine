@@ -247,7 +247,18 @@
 </style>
 </head>
 <body>
-<div id="app"></div>
+<script>
+try{
+  new Function("(async()=>{})()");
+  new Function("var a={...{b:1}};");
+}catch(e){
+  document.write('<div style="font-family:sans-serif;padding:30px;background:#fff7ed;border:2px solid #f97316;border-radius:12px;max-width:640px;margin:40px auto;font-size:16px;">');
+  document.write('<b>📱 Cet appareil est trop ancien pour l\'application.</b><br><br>');
+  document.write('Mettez à jour iOS : <b>Réglages → Général → Mise à jour logicielle</b>, puis rouvrez le lien dans Safari.');
+  document.write('</div>');
+  document.write('<style>#app,.topbar,.chips,.footerbar,#toast{display:none !important;}</style>');
+}
+</script>
 <noscript>
   <div style="max-width:640px; margin:40px auto; padding:20px; font-family:sans-serif; background:#fff7ed; border:2px solid #f97316; border-radius:12px; font-size:15px;">
     ⚠️ Cette application a besoin de JavaScript pour fonctionner.<br>
@@ -1185,6 +1196,7 @@ function modalReglages(){
     <div class="setrow"><input id="fAutoCloud" type="checkbox" ${r.autoCloud !== false ? "checked" : ""}>
       <label for="fAutoCloud" style="margin:0;">Sauvegarder en ligne dès qu'un audit est complet</label></div>
     <button class="btn ghost block" data-action="cloud-restore">☁️ Restaurer depuis le Drive</button>
+    <button class="btn ghost block" data-action="reparer" style="margin-top:8px;">🧹 Réparer l'affichage (cache de l'app)</button>
     <p class="meta" style="margin:8px 0 0;">Les audits complets sont copiés dans votre Google Drive (dossier « Audit Cuisine Sauvegardes ») — à l'abri même si le téléphone est perdu.</p>
     <button class="btn primary block" data-action="close-modal" style="margin-top:10px;">Fermer</button>`);
 }
@@ -1670,6 +1682,16 @@ document.body.addEventListener("click", async (e) => {
     if(!confirm("Supprimer définitivement l'audit « " + (rec.restaurant || "") + " » et ses photos ?")) return;
     dbDel(rec.id).then(() => { cache = cache.filter(a => a.id !== rec.id); renderList(); toast("Audit supprimé"); }).catch(console.error);
   }
+  else if(act === "reparer"){
+    try{
+      if(navigator.serviceWorker){
+        navigator.serviceWorker.getRegistrations().then((rs) => rs.forEach((r2) => r2.unregister()));
+      }
+      if(window.caches){ caches.keys().then((ks) => ks.forEach((k) => caches.delete(k))); }
+    }catch(e){}
+    toast("Réparation en cours — rechargement…");
+    setTimeout(() => location.reload(), 900);
+  }
   else if(act === "cloud-sync"){
     toast("Synchronisation…");
     cloudToutSynchro()
@@ -2042,19 +2064,36 @@ overlay.addEventListener("click", (e) => {
 });
 
 /* ---------- Démarrage ---------- */
+window.onerror = function(msg, source, ligne){
+  try{
+    const el = document.getElementById("app");
+    if(el && el.innerHTML.length < 50){
+      el.innerHTML = '<div class="wrap" style="padding-top:30px;"><div class="card" style="border:2px solid var(--bad);">'
+        + '<h3>⚠️ Erreur de démarrage</h3><p class="meta" style="word-break:break-all;">'
+        + String(msg).replace(/</g, "&lt;") + ' (ligne ' + ligne + ')</p>'
+        + '<p class="meta">📸 Envoyez une capture d\'écran pour correction — ou fermez tous les onglets du site puis rouvrez-le.</p></div></div>';
+    }
+  }catch(e){}
+};
 (async function init(){
-  const ok = await openDB();
-  if(!ok){
-    app.innerHTML = `<div class="wrap"><div class="home-head"><h1>🧑‍🍳 Audit Cuisine</h1></div>
-      <div class="card">⚠️ Le stockage local n'est pas disponible dans ce navigateur.
-      Ouvrez ce fichier dans Safari ou Chrome.</div></div>`;
-    return;
+  try{
+    const ok = await openDB();
+    if(!ok){
+      app.innerHTML = `<div class="wrap"><div class="home-head"><h1>🧑‍🍳 Audit Cuisine</h1></div>
+        <div class="card">⚠️ Le stockage local n'est pas disponible dans ce navigateur.
+        Ouvrez ce fichier dans Safari ou Chrome.</div></div>`;
+      return;
+    }
+    cache = await dbAllLege();
+    cache.forEach((a) => { a.actions = a.actions || {}; });
+    appliquerGrillePerso();
+    if(!reglages().cle){ const r = reglages(); r.cle = CLE_CLOUD_DEFAUT; saveReglages(r); }
+    renderList();
+  }catch(e){
+    const el = document.getElementById("app");
+    if(el) el.innerHTML = '<div class="wrap" style="padding-top:30px;"><div class="card" style="border:2px solid var(--bad);"><h3>⚠️ Erreur de démarrage</h3><p class="meta" style="word-break:break-all;">'
+      + String(e && e.stack || e).replace(/</g, "&lt;").slice(0, 300) + '</p></div></div>';
   }
-  cache = await dbAllLege();
-  cache.forEach((a) => { a.actions = a.actions || {}; });
-  appliquerGrillePerso();
-  if(!reglages().cle){ const r = reglages(); r.cle = CLE_CLOUD_DEFAUT; saveReglages(r); }
-  renderList();
 })();
 
 // Glissement gauche/droite en mode focus
