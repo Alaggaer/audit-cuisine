@@ -465,14 +465,26 @@ function allege(rec){
   return c;
 }
 async function dbAllLege(){
-  const liste = db ? await dbAll() : cache;
-  return liste.map(allege);
+  if(stockageHS) return cache;
+  const r = await avecDelai(dbAll(), 2500);
+  if(r.etat !== "ok" || !Array.isArray(r.valeur)){ stockageHS = true; return cache; }
+  return r.valeur.map(allege);
 }
 
 /* =====================================================================
    STOCKAGE (IndexedDB, sauvegarde automatique)
    ===================================================================== */
 let db = null;
+let stockageHS = false;   // IndexedDB momentanément indisponible ou bloquée
+function avecDelai(p, ms){
+  return Promise.race([
+    Promise.resolve(p).then(
+      (v) => ({ etat:"ok", valeur:v === undefined ? null : v }),
+      () => ({ etat:"erreur", valeur:null })
+    ),
+    new Promise((res) => setTimeout(() => res({ etat:"delai", valeur:null }), ms))
+  ]);
+}
 function openDB(){
   return new Promise((resolve) => {
     try{
@@ -480,13 +492,26 @@ function openDB(){
       req.onupgradeneeded = () => { req.result.createObjectStore("audits", { keyPath:"id" }); };
       req.onsuccess = () => { db = req.result; resolve(true); };
       req.onerror = () => resolve(false);
+      req.onblocked = () => resolve(false);
     }catch(e){ resolve(false); }
   });
 }
-function dbPut(rec){ return new Promise((res, rej) => { const tx = db.transaction("audits","readwrite"); tx.objectStore("audits").put(rec); tx.oncomplete = res; tx.onerror = () => rej(tx.error); }); }
-function dbAll(){ return new Promise((res, rej) => { const tx = db.transaction("audits","readonly"); const r = tx.objectStore("audits").getAll(); tx.oncomplete = () => res(r.result || []); tx.onerror = () => rej(tx.error); }); }
-function dbGet(id){ return new Promise((res, rej) => { const tx = db.transaction("audits","readonly"); const r = tx.objectStore("audits").get(id); tx.oncomplete = () => res(r.result); tx.onerror = () => rej(tx.error); }); }
-function dbDel(id){ return new Promise((res, rej) => { const tx = db.transaction("audits","readwrite"); tx.objectStore("audits").delete(id); tx.oncomplete = res; tx.onerror = () => rej(tx.error); }); }
+function dbPut(rec){
+  const p = new Promise((res, rej) => { const tx = db.transaction("audits","readwrite"); tx.objectStore("audits").put(rec); tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
+  return avecDelai(p, 2500).then((r) => { if(r.etat !== "ok") stockageHS = true; });
+}
+function dbAll(){
+  const p = new Promise((res, rej) => { const tx = db.transaction("audits","readonly"); const r = tx.objectStore("audits").getAll(); tx.oncomplete = () => res(r.result || []); tx.onerror = () => rej(tx.error); });
+  return avecDelai(p, 2500).then((r) => { if(r.etat !== "ok") stockageHS = true; return Array.isArray(r.valeur) ? r.valeur : []; });
+}
+function dbGet(id){
+  const p = new Promise((res, rej) => { const tx = db.transaction("audits","readonly"); const r = tx.objectStore("audits").get(id); tx.oncomplete = () => res(r.result); tx.onerror = () => rej(tx.error); });
+  return avecDelai(p, 2500).then((r) => r.valeur);
+}
+function dbDel(id){
+  const p = new Promise((res, rej) => { const tx = db.transaction("audits","readwrite"); tx.objectStore("audits").delete(id); tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
+  return avecDelai(p, 2500);
+}
 
 /* =====================================================================
    ÉTAT
@@ -743,6 +768,13 @@ function renderList(){
       <p>${cache.length} audit${cache.length > 1 ? "s" : ""} enregistré${cache.length > 1 ? "s" : ""} sur cet appareil · ${TOTAL_Q} questions réparties en ${SECTIONS.length} sections</p>
     </div>
     <button class="btn primary block" data-action="new-audit">＋&nbsp; Nouvel audit</button>`;
+  if(stockageHS){
+    html += `<div class="card" style="border:2px solid var(--warn); background:#fffbeb;">
+      <b>⚠️ Mode mémoire temporaire</b>
+      <p class="meta">Le stockage de l'appareil est momentanément occupé : vos audits habituels réapparaîtront en fermant <b>tous les onglets</b> du site puis en rouvrant le navigateur. Ce que vous saisissez maintenant reste consultable pendant la session (pensez à ☁️ ou 📄 pour le conserver).</p>
+      <button class="btn primary block" data-action="reessayer" style="margin-top:8px;">🔄 Réessayer le stockage</button>
+    </div>`;
+  }
   if(enCours){
     const gs = globalStats(enCours);
     html += `<button class="btn ghost block" data-action="open-audit" data-id="${enCours.id}" style="margin-top:8px;">
@@ -1921,6 +1953,14 @@ document.body.addEventListener("click", async (e) => {
     state.fq = Math.max(0, Math.min(SECTIONS[state.sec].questions.length - 1, state.fq + parseInt(el.dataset.d, 10)));
     renderAudit();
   }
+  else if(act === "reessayer"){
+    stockageHS = false;
+    dbAllLege().then((list) => {
+      cache = list;
+      cache.forEach((a) => { a.actions = a.actions || {}; });
+      renderList();
+    }).catch(() => renderList());
+  }
   else if(act === "vetocrit"){
     const r = reglages();
     r.vetocrit = el.dataset.v;
@@ -2081,13 +2121,9 @@ window.onerror = function(msg, source, ligne){
 };
 (async function init(){
   try{
-    const ok = await openDB();
-    if(!ok){
-      app.innerHTML = `<div class="wrap"><div class="home-head"><h1>🧑‍🍳 Audit Cuisine</h1></div>
-        <div class="card">⚠️ Le stockage local n'est pas disponible dans ce navigateur.
-        Ouvrez ce fichier dans Safari ou Chrome.</div></div>`;
-      return;
-    }
+    let ok = true;
+    if(window.indexedDB){ ok = await avecDelai(openDB(), 3500).then((r) => r.etat === "ok" && r.valeur === true); }
+    if(!ok) stockageHS = true;
     cache = await dbAllLege();
     cache.forEach((a) => { a.actions = a.actions || {}; });
     appliquerGrillePerso();
@@ -2096,10 +2132,11 @@ window.onerror = function(msg, source, ligne){
   }catch(e){
     const el = document.getElementById("app");
     if(el) el.innerHTML = '<div class="wrap" style="padding-top:30px;"><div class="card" style="border:2px solid var(--bad);"><h3>⚠️ Erreur de démarrage</h3><p class="meta" style="word-break:break-all;">'
-      + String(e && e.stack || e).replace(/</g, "&lt;").slice(0, 300) + '</p></div></div>';
+      + String(e && e.stack || e).replace(/</g, "&lt;").slice(0, 300) + '</p><p class="meta">Fermez tous les onglets du site puis rouvrez — vos audits sont conservés.</p></div></div>';
   }
 })();
 
+// Glissement gauche/droite en mode focus
 // Glissement gauche/droite en mode focus
 let tX = null;
 app.addEventListener("touchstart", (e) => { tX = e.touches[0].clientX; }, { passive:true });
