@@ -267,7 +267,7 @@ try{
   </div>
 </noscript>
 <div id="app"></div>
-<div id="toast" class="toast"></div>
+
 <input type="file" id="photoInput" accept="image/*" multiple class="hide"/>
 <input type="file" id="importInput" accept=".json,application/json" class="hide"/>
 <input type="file" id="camInput" accept="image/*" capture="environment" multiple class="hide"/>
@@ -463,14 +463,14 @@ function restosUniques(){
 }
 function allege(rec){
   const c = Object.assign({}, rec);
-  delete c.photos;
+  c.photos = {};
   return c;
 }
 async function dbAllLege(){
   if(stockageHS) return cache;
-  const r = await avecDelai(dbAll(), 2500);
-  if(r.etat !== "ok" || !Array.isArray(r.valeur)){ stockageHS = true; return cache; }
-  return r.valeur.map(allege);
+  const liste = await dbAll();
+  if(liste === null) return cache;
+  return liste.map(allege);
 }
 
 /* =====================================================================
@@ -500,11 +500,14 @@ function openDB(){
 }
 function dbPut(rec){
   const p = new Promise((res, rej) => { const tx = db.transaction("audits","readwrite"); tx.objectStore("audits").put(rec); tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
-  return avecDelai(p, 2500).then((r) => { if(r.etat !== "ok") stockageHS = true; });
+  return avecDelai(p, 2500).then((r) => { if(r.etat !== "ok") stockageHS = true; return r.etat === "ok"; });
 }
 function dbAll(){
   const p = new Promise((res, rej) => { const tx = db.transaction("audits","readonly"); const r = tx.objectStore("audits").getAll(); tx.oncomplete = () => res(r.result || []); tx.onerror = () => rej(tx.error); });
-  return avecDelai(p, 2500).then((r) => { if(r.etat !== "ok") stockageHS = true; return Array.isArray(r.valeur) ? r.valeur : []; });
+  return avecDelai(p, 2500).then((r) => {
+    if(r.etat !== "ok"){ stockageHS = true; return null; }
+    return Array.isArray(r.valeur) ? r.valeur : [];
+  });
 }
 function dbGet(id){
   const p = new Promise((res, rej) => { const tx = db.transaction("audits","readonly"); const r = tx.objectStore("audits").get(id); tx.oncomplete = () => res(r.result); tx.onerror = () => rej(tx.error); });
@@ -538,14 +541,15 @@ function scheduleSave(){
   clearTimeout(saveTimer);
   saveTimer = setTimeout(async () => {
     try{
-      if(db){ await dbPut(current); setSaveStatus("saved"); }
-      if(reglages().autoCloud !== false){
-        const gs = globalStats(current);
-        if(gs.done === TOTAL_Q && (!current.cloudOk || Date.now() - current.cloudOk > 60000)){
-          cloudSauver(current, true)
-            .then(() => { dbPut(current).catch(() => {}); toast("☁️ Audit complet sauvegardé dans votre Drive"); })
-            .catch(() => {});
-        }
+      let okPut = false;
+      if(db){ okPut = await dbPut(current); setSaveStatus(okPut ? "saved" : "error"); }
+      const gs = globalStats(current);
+      if(gs.done === TOTAL_Q && !current.completedAt) current.completedAt = Date.now();
+      else if(gs.done < TOTAL_Q) delete current.completedAt;
+      if(reglages().autoCloud !== false && gs.done === TOTAL_Q && (!current.cloudOk || Date.now() - current.cloudOk > 60000)){
+        cloudSauver(current, true)
+          .then(() => { dbPut(current).catch(() => {}); toast("☁️ Audit complet sauvegardé dans votre Drive"); })
+          .catch(() => toast("⚠️ Sauvegarde en ligne impossible — réessayez plus tard"));
       }
     }
     catch(e){ console.error(e); setSaveStatus("error"); }
@@ -1263,7 +1267,8 @@ function download(blob, name){
 function safeName(s){ return String(s || "audit").replace(/[^\w\- àâäéèêëîïôöùûüç]/gi, "").replace(/\s+/g, "-"); }
 
 async function exportJSON(){
-  const complet = db ? await dbAll() : cache;
+  let complet = (db && !stockageHS) ? await dbAll() : cache;
+  if(!complet || (!complet.length && cache.length)) complet = cache;
   const data = JSON.stringify({ app:"audit-cuisine", version:1, exports:complet }, null, 1);
   download(new Blob([data], { type:"application/json" }), "audit-cuisine-sauvegarde-" + todayISO() + ".json");
   toast("Sauvegarde téléchargée ✓");
@@ -1278,11 +1283,11 @@ function exportCSV(){
       current.restaurant, current.date, current.auditor, s.title, q.t, rep,
       (current.notes[q.id] || "").replace(/[\r\n;]+/g, " "),
       (current.photos[q.id] || []).length
-    ].map(v => String(v == null ? "" : v)).join(";"));
+    ].map(v => { v = String(v == null ? "" : v); return /[";\r\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }).join(";"));
   }));
   const gs = globalStats(current);
   lines.push("");
-  lines.push("SCORE GLOBAL;;;" + (gs.score === null ? "" : Math.round(gs.score) + " %") + ";;;" + interp(gs.score).label);
+  lines.push("SCORE GLOBAL;;;;;" + (gs.score === null ? "" : Math.round(gs.score) + " %") + ";" + interp(gs.score).label);
   download(new Blob(["\uFEFF" + lines.join("\r\n")], { type:"text/csv;charset=utf-8" }),
     "audit-" + safeName(current.restaurant) + "-" + current.date + ".csv");
 }
@@ -1307,6 +1312,7 @@ function buildReportHtml(audit){
     details += `<div class="nc"><b>✗ ${esc(q.t)}${recidive ? ` <span style="background:#7c2d12;color:#fff;border-radius:6px;padding:2px 8px;font-size:11px;">🔥 RÉCIDIVE</span>` : ""}</b>
       ${audit.notes[q.id] ? `<div class="nn">${esc(audit.notes[q.id])}</div>` : ""}
       ${(act.echeance || act.quand) ? `<div class="nn">📌 À traiter : ${esc(act.echeance || (act.quand ? "pour le " + fmtDate(act.quand) : "—"))}</div>` : ""}
+      ${q.crit && !photos.length ? `<div class="nn" style="background:#fff7ed; color:#9a3412;">📸 Photo recommandée pour étayer cette non-conformité critique</div>` : ""}
       ${photos.length ? `<div>${photos.map(p => `<img src="${p}">`).join("")}</div>` : ""}</div>`;
     if(act.echeance || act.quand){
       planLignes += `<tr><td>${esc(q.t)}</td><td>${esc(act.echeance || (act.quand ? fmtDate(act.quand) : "—"))}</td></tr>`;
@@ -1631,6 +1637,7 @@ async function cloudToutSynchro(){
     if(!dist || (a.updatedAt || 0) > majDist){
       let complet = a;
       if(db){ const c = await dbGet(a.id); if(c) complet = c; }
+      complet.answers = complet.answers || {}; complet.notes = complet.notes || {}; complet.photos = complet.photos || {}; complet.actions = complet.actions || {};
       await cloudPost(cle, complet);
       pousses++;
     }
@@ -1640,7 +1647,7 @@ async function cloudToutSynchro(){
     const majDist = Date.parse(e.maj) || 0;
     if(!loc || majDist > (loc.updatedAt || 0)){
       const audit = await cloudCharger(e.id);
-      audit.actions = audit.actions || {};
+      audit.answers = audit.answers || {}; audit.notes = audit.notes || {}; audit.photos = audit.photos || {}; audit.actions = audit.actions || {};
       await dbPut(audit);
       importes++;
     }
@@ -1684,7 +1691,7 @@ document.body.addEventListener("click", async (e) => {
     cache.push(rec);
     dbPut(rec).catch(console.error);
     closeModal();
-    current = rec; state.view = "audit"; state.sec = 0; state.autoJump = false;
+    current = rec; state.view = "audit"; state.sec = 0; state.fq = 0; state.autoJump = false;
     render();
   }
   else if(act === "close-modal") closeModal();
@@ -1697,8 +1704,13 @@ document.body.addEventListener("click", async (e) => {
   else if(act === "open-audit" || act === "open-report"){
     let rec = cache.find(a => a.id === el.dataset.id);
     if(!rec) return;
-    if(db){ const complet = await dbGet(el.dataset.id); if(complet) rec = complet; }
-    rec.actions = rec.actions || {};
+    if(db){
+      let complet = await dbGet(el.dataset.id);
+      if(!complet){ await new Promise(r => setTimeout(r, 400)); complet = await dbGet(el.dataset.id); }
+      if(complet) rec = complet;
+    }
+    rec.answers = rec.answers || {}; rec.notes = rec.notes || {}; rec.photos = rec.photos || {}; rec.actions = rec.actions || {};
+    state.fq = 0;
     current = rec;
     if(act === "open-report"){ state.view = "report"; render(); return; }
     state.view = "audit"; state.autoJump = true;
@@ -1739,7 +1751,7 @@ document.body.addEventListener("click", async (e) => {
   else if(act === "export-json"){ exportJSON().catch((e) => toast("Erreur : " + e.message)); }
   else if(act === "import-json") document.getElementById("importInput").click();
   else if(act === "back-home"){ if(db){ dbAllLege().then(list => { cache = list; state.view = "list"; render(); }).catch(() => renderList()); } else renderList(); }
-  else if(act === "goto-section"){ state.sec = parseInt(el.dataset.i, 10); state.autoJump = true; renderAudit(); }
+  else if(act === "goto-section"){ state.sec = parseInt(el.dataset.i, 10); state.fq = 0; state.autoJump = true; renderAudit(); }
   else if(act === "answer"){
     const qid = el.dataset.qid, v = el.dataset.v;
     const card = el.closest(".qcard");
@@ -1757,7 +1769,14 @@ document.body.addEventListener("click", async (e) => {
     const tags = card.querySelector(".tags");
     if(tags) tags.classList.toggle("hide", !(nonConforme || note.value.trim()));
     const estCritique = qCourante && qCourante.crit;
-    if(estCritique && nonConforme) setTimeout(() => { if(state.view === "audit") renderAudit(); }, 250);
+    if(estCritique && nonConforme){
+      const y = window.scrollY;
+      setTimeout(() => {
+        if(state.view !== "audit") return;
+        renderAudit();
+        window.scrollTo(0, y);
+      }, 250);
+    }
     scheduleSave(); updateLive();
     if(reglages().focus && current){
       const q = SECTIONS[state.sec].questions.find((x) => x.id === qid);
@@ -1775,8 +1794,7 @@ document.body.addEventListener("click", async (e) => {
         setTimeout(() => { if(state.view === "audit") renderAudit(); }, 300);
       }
     }
-    const gsc = globalStats(current);
-    if(gsc.done === TOTAL_Q && !current.completedAt) current.completedAt = Date.now();
+
   }
   else if(act === "add-photo"){
     const inp = document.getElementById("photoInput");
@@ -1790,7 +1808,10 @@ document.body.addEventListener("click", async (e) => {
     if(!current || !current.photos[qid]) return;
     current.photos[qid].splice(i, 1);
     if(!current.photos[qid].length) delete current.photos[qid];
-    scheduleSave(); renderPhotoRow(qid);
+    scheduleSave();
+    const qSup = SECTIONS[state.sec] && SECTIONS[state.sec].questions.find((x) => x.id === qid);
+    if(qSup && qSup.crit && current.answers[qid] === (qSup.inv ? "oui" : "non")){ renderAudit(); return; }
+    renderPhotoRow(qid);
   }
   else if(act === "open-report-current" || act === "open-report"){ state.view = "report"; render(); }
   else if(act === "back-from-report"){ state.view = "audit"; render(); }
@@ -1804,7 +1825,12 @@ document.body.addEventListener("click", async (e) => {
     if(db){ const complet = await dbGet(el.dataset.id); if(complet) rec = complet; }
     toast("Sauvegarde en ligne…");
     cloudSauver(rec)
-      .then(() => { dbPut(rec).catch(() => {}); renderList(); })
+      .then(() => {
+        const i = cache.findIndex(x => x.id === rec.id);
+        if(i >= 0) cache[i].cloudOk = rec.cloudOk;
+        dbPut(rec).catch(() => {});
+        renderList();
+      })
       .catch((e) => toast("Erreur : " + e.message));
   }
   else if(act === "cloud-save-current"){
@@ -1818,7 +1844,7 @@ document.body.addEventListener("click", async (e) => {
     toast("Import depuis le Drive…");
     cloudCharger(el.dataset.id)
       .then(async (audit) => {
-        audit.actions = audit.actions || {};
+        audit.answers = audit.answers || {}; audit.notes = audit.notes || {}; audit.photos = audit.photos || {}; audit.actions = audit.actions || {};
         await dbPut(audit);
         cache = await dbAllLege();
         closeModal();
@@ -2078,11 +2104,11 @@ document.getElementById("importInput").addEventListener("change", async (e) => {
     const list = Array.isArray(data) ? data : (data.exports || []);
     let n = 0;
     for(const rec of list){
-      if(!rec || !rec.id || typeof rec.answers !== "object") continue;
-      rec.photos = rec.photos || {}; rec.notes = rec.notes || {};
+      if(!rec || !rec.id) continue;
+      rec.answers = rec.answers || {}; rec.notes = rec.notes || {}; rec.photos = rec.photos || {}; rec.actions = rec.actions || {};
       await dbPut(rec); n++;
     }
-    cache = await dbAll();
+    cache = await dbAllLege();
     renderList();
     toast(n + " audit(s) importé(s) ✓");
   }catch(err){ console.error(err); toast("Fichier de sauvegarde invalide"); }
@@ -2110,6 +2136,16 @@ overlay.addEventListener("click", (e) => {
 });
 
 /* ---------- Démarrage ---------- */
+window.addEventListener("unhandledrejection", function(ev){
+  try{
+    const el = document.getElementById("app");
+    if(el && el.innerHTML.length < 50){
+      el.innerHTML = '<div class="wrap" style="padding-top:30px;"><div class="card" style="border:2px solid var(--bad);"><h3>⚠️ Erreur</h3><p class="meta" style="word-break:break-all;">'
+        + String(ev.reason && ev.reason.message || ev.reason).replace(/</g, "&lt;").slice(0, 250)
+        + '</p><p class="meta">📸 Envoyez une capture d écran pour correction — ou fermez tous les onglets du site puis rouvrez.</p></div></div>';
+    }
+  }catch(e){}
+});
 window.onerror = function(msg, source, ligne){
   try{
     const el = document.getElementById("app");
