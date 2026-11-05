@@ -546,10 +546,21 @@ function scheduleSave(){
       const gs = globalStats(current);
       if(gs.done === TOTAL_Q && !current.completedAt) current.completedAt = Date.now();
       else if(gs.done < TOTAL_Q) delete current.completedAt;
-      if(reglages().autoCloud !== false && gs.done === TOTAL_Q && (!current.cloudOk || Date.now() - current.cloudOk > 60000)){
-        cloudSauver(current, true)
-          .then(() => { dbPut(current).catch(() => {}); toast("☁️ Audit complet sauvegardé dans votre Drive"); })
-          .catch(() => toast("⚠️ Sauvegarde en ligne impossible — réessayez plus tard"));
+      if(reglages().autoCloud !== false){
+        const complet = gs.done === TOTAL_Q;
+        const dernier = Math.max(current.cloudOk || 0, current.cloudDernier || 0);
+        const due = (complet && (!current.cloudOk || Date.now() - current.cloudOk > 60000))
+                 || (!complet && (!current.cloudDernier || Date.now() - current.cloudDernier > 120000));
+        if(due){
+          cloudSauver(current, true)
+            .then(() => {
+              current.cloudDernier = Date.now();
+              if(complet) current.cloudOk = Date.now();
+              dbPut(current).catch(() => {});
+              if(complet) toast("☁️ Audit complet sauvegardé dans votre Drive");
+            })
+            .catch(() => { if(complet) toast("⚠️ Sauvegarde en ligne impossible — réessayez plus tard"); });
+        }
       }
     }
     catch(e){ console.error(e); setSaveStatus("error"); }
