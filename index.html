@@ -49,7 +49,7 @@
 
   /* ---------- Chips de sections ---------- */
   .chips{display:flex; gap:8px; overflow-x:auto; padding:10px 14px; -webkit-overflow-scrolling:touch;
-    scrollbar-width:none; position:sticky; top:calc(64px + env(safe-area-inset-top)); z-index:25;
+    scrollbar-width:none; position:sticky; top:var(--haut-barre, calc(64px + env(safe-area-inset-top))); z-index:25;
     background:linear-gradient(var(--bg) 82%, transparent);}
   .chips::-webkit-scrollbar{display:none;}
   .chip{flex:none; display:flex; align-items:center; gap:6px; border:1.5px solid var(--line); background:#fff;
@@ -443,9 +443,11 @@ function saveReglages(r){ localStorage.setItem("audit:reglages", JSON.stringify(
 /* ---- Questions personnalisées (ajoutées en fin de section) ---- */
 function appliquerGrillePerso(){
   const r0 = reglages();
-  if(r0.grille && r0.grille.length && !r0.grilleV2){
-    // ancienne indexation (12 sections) : le service était l'index 11, il est passé à 12
-    r0.grille.forEach((p) => { if(p.sec === 11) p.sec = 12; });
+  if(!r0.grilleV2){
+    // ancienne indexation (12 sections) : le service était l'index 11, il est passé à 12.
+    // Le repère est posé même sans question perso, sinon la première question ajoutée
+    // dans « Matériels » (index 11) serait prise pour une ancienne et déplacée dans « Service ».
+    (r0.grille || []).forEach((p) => { if(p.sec === 11) p.sec = 12; });
     r0.grilleV2 = true;
     saveReglages(r0);
   }
@@ -461,23 +463,131 @@ function appliquerGrillePerso(){
 function restosUniques(){
   return [...new Set(cache.map((a) => (a.restaurant || "").trim()).filter(Boolean))];
 }
+/* ---- Résumé d'un audit pour la liste : tout sauf les photos et les signatures.
+   Un résumé ne doit jamais être ouvert, modifié ou enregistré à la place de l'audit complet. ---- */
+function nbPhotos(rec){
+  let n = 0;
+  const p = (rec && rec.photos) || {};
+  for(const k in p){ if(Array.isArray(p[k])) n += p[k].length; }
+  return n;
+}
 function allege(rec){
   const c = Object.assign({}, rec);
+  c.nbPhotos = rec._resume ? (rec.nbPhotos || 0) : nbPhotos(rec);
   c.photos = {};
+  c.signatures = {};
+  c._resume = true;
   return c;
 }
-async function dbAllLege(){
-  if(stockageHS) return cache;
-  const liste = await dbAll();
-  if(liste === null) return cache;
-  return liste.map(allege);
+
+/* ---- Garde-fous : un audit venu d'un fichier, du Drive ou d'une ancienne version doit avoir la bonne forme ---- */
+function estObjet(v){ return !!v && typeof v === "object" && !Array.isArray(v); }
+function enTexte(v, max){
+  if(v == null) return "";
+  if(typeof v !== "string") v = (typeof v === "number" || typeof v === "boolean") ? String(v) : "";
+  return v.length > max ? v.slice(0, max) : v;
 }
+function estImage(v){ return typeof v === "string" && /^data:image\/(jpeg|png|webp|gif);base64,[A-Za-z0-9+/=]*$/.test(v); }
+// Remet en forme, sur place, les champs dont l'affichage a besoin (sans rien retirer de valable)
+function assainir(a){
+  a.restaurant = enTexte(a.restaurant, 200);
+  a.auditor = enTexte(a.auditor, 200);
+  a.date = enTexte(a.date, 40);
+  ["answers", "notes", "photos", "actions"].forEach((k) => { if(!estObjet(a[k])) a[k] = {}; });
+  ["mesures", "rappels", "signatures"].forEach((k) => { if(a[k] != null && !estObjet(a[k])) delete a[k]; });
+  for(const k in a.answers){ const v = a.answers[k]; if(v !== "oui" && v !== "non" && v !== "na") delete a.answers[k]; }
+  for(const k in a.notes){ if(typeof a.notes[k] !== "string") a.notes[k] = enTexte(a.notes[k], 5000); }
+  for(const k in a.photos){
+    if(!Array.isArray(a.photos[k])) delete a.photos[k];
+    else if(a.photos[k].some((p) => typeof p !== "string")) a.photos[k] = a.photos[k].filter((p) => typeof p === "string");
+  }
+  for(const k in a.actions){ if(!estObjet(a.actions[k])) delete a.actions[k]; }
+  if(a.mesures){ for(const k in a.mesures){ if(typeof a.mesures[k] !== "string") a.mesures[k] = enTexte(a.mesures[k], 30); } }
+  if(a.rappels){ for(const k in a.rappels){ if(!estObjet(a.rappels[k])) delete a.rappels[k]; } }
+  if(a.signatures){ for(const k in a.signatures){ if(typeof a.signatures[k] !== "string") delete a.signatures[k]; } }
+  return a;
+}
+// Copie contrôlée d'un audit reçu de l'extérieur (fichier importé, Drive) ; null s'il est inutilisable
+const CLE_SURE = /^[A-Za-z0-9_-]{1,40}$/;
+function normaliserAudit(brut){
+  if(!estObjet(brut)) return null;
+  const id = typeof brut.id === "number" ? String(brut.id) : brut.id;
+  if(typeof id !== "string" || !/^[A-Za-z0-9_.:-]{1,80}$/.test(id)) return null;
+  const nombre = (v) => (typeof v === "number" && isFinite(v) && v > 0) ? v : undefined;
+  const champs = (src, garde) => {
+    const out = {};
+    if(estObjet(src)){
+      for(const k of Object.keys(src)){
+        if(!CLE_SURE.test(k) || k === "__proto__") continue;
+        const v = garde(src[k]);
+        if(v !== undefined) out[k] = v;
+      }
+    }
+    return out;
+  };
+  const textes = (v) => {            // objet dont on ne garde que les valeurs simples (texte, nombre, oui/non)
+    const out = champs(v, (x) => (typeof x === "string" || typeof x === "number" || typeof x === "boolean") ? enTexte(x, 5000) : undefined);
+    return out;
+  };
+  const a = { id };
+  a.restaurant = enTexte(brut.restaurant, 200).trim();
+  a.auditor = enTexte(brut.auditor, 200).trim();
+  a.date = enTexte(brut.date, 40);
+  a.createdAt = nombre(brut.createdAt) || Date.now();
+  a.updatedAt = nombre(brut.updatedAt) || a.createdAt;
+  ["startedAt", "completedAt", "cloudOk", "cloudDernier", "cloudVersion", "cloudDebut"].forEach((k) => { const n = nombre(brut[k]); if(n) a[k] = n; });
+  if(brut.cloudComplet === true) a.cloudComplet = true;
+  if(typeof brut.suiviDe === "string" && brut.suiviDe.length <= 80) a.suiviDe = brut.suiviDe;
+  a.answers = champs(brut.answers, (v) => (v === "oui" || v === "non" || v === "na") ? v : undefined);
+  a.notes = champs(brut.notes, (v) => { const t = enTexte(v, 5000); return t ? t : undefined; });
+  a.photos = champs(brut.photos, (v) => { const l = Array.isArray(v) ? v.filter(estImage) : []; return l.length ? l : undefined; });
+  a.actions = champs(brut.actions, (v) => estObjet(v) ? textes(v) : undefined);
+  const mesures = champs(brut.mesures, (v) => { const t = enTexte(v, 30); return t ? t : undefined; });
+  if(Object.keys(mesures).length) a.mesures = mesures;
+  const rappels = champs(brut.rappels, (v) => estObjet(v) ? { date:enTexte(v.date, 40), note:enTexte(v.note, 5000) } : undefined);
+  if(Object.keys(rappels).length) a.rappels = rappels;
+  if(estObjet(brut.signatures)){
+    const s = {};
+    ["auditeur", "responsable"].forEach((r) => { if(estImage(brut.signatures[r])) s[r] = brut.signatures[r]; });
+    if(Object.keys(s).length) a.signatures = s;
+  }
+  return a;
+}
+// Vrai si remplacer l'audit de l'appareil par « nouveau » ferait perdre quelque chose
+function remplacementRisque(local, nouveau){
+  if(!local) return false;
+  const photosLocales = local._resume ? (local.nbPhotos || 0) : nbPhotos(local);
+  return (nouveau.updatedAt || 0) < (local.updatedAt || 0) || nbPhotos(nouveau) < photosLocales;
+}
+/* Un audit compte dans le suivi quand il est terminé (toutes les questions de la grille d'origine ont une réponse).
+   Une question perso ajoutée plus tard ne fait donc pas disparaître les anciens audits des courbes. */
+function auditTermine(a){
+  if(a.completedAt) return true;
+  for(const s of SECTIONS){ for(const q of s.questions){ if(!q.perso && !a.answers[q.id]) return false; } }
+  return true;
+}
+function parDate(a, b){ return (a.date || "").localeCompare(b.date || "") || (a.createdAt || 0) - (b.createdAt || 0); }
+
+/* ---- Audits supprimés sur cet appareil : la synchronisation ne doit pas les faire revenir ---- */
+function supprimes(){ try{ const s = JSON.parse(localStorage.getItem("audit:supprimes") || "{}"); return estObjet(s) ? s : {}; }catch(e){ return {}; } }
+function noterSuppression(id){ try{ const s = supprimes(); s[id] = Date.now(); localStorage.setItem("audit:supprimes", JSON.stringify(s)); }catch(e){} }
+function oublierSuppression(id){ try{ const s = supprimes(); if(s[id]){ delete s[id]; localStorage.setItem("audit:supprimes", JSON.stringify(s)); } }catch(e){} }
+/* ---- Dernière date du Drive vue pour chaque audit jugé à jour : la synchronisation ne re-télécharge pas ce qui n'a pas changé ---- */
+function majVues(){ try{ const s = JSON.parse(localStorage.getItem("audit:majDrive") || "{}"); return estObjet(s) ? s : {}; }catch(e){ return {}; } }
+function noterMajVues(vues){ try{ localStorage.setItem("audit:majDrive", JSON.stringify(vues)); }catch(e){} }
 
 /* =====================================================================
    STOCKAGE (IndexedDB, sauvegarde automatique)
+   Deux magasins : « audits » (audit complet, avec photos) et « resumes »
+   (copie sans photos, pour la liste). Ils sont toujours écrits ensemble,
+   si bien que l'accueil n'a plus besoin de relire les photos.
    ===================================================================== */
 let db = null;
 let stockageHS = false;   // IndexedDB momentanément indisponible ou bloquée
+let resumesPrets = false; // le magasin « resumes » a été vérifié : il contient bien tous les audits
+let demarre = false;      // le premier affichage a eu lieu
+const DELAI_LISTE = 4000;   // lecture de la liste (légère)
+const DELAI_AUDIT = 10000;  // lecture ou écriture d'un audit complet (peut être lourd : photos)
 function avecDelai(p, ms){
   return Promise.race([
     Promise.resolve(p).then(
@@ -490,42 +600,194 @@ function avecDelai(p, ms){
 function openDB(){
   return new Promise((resolve) => {
     try{
-      const req = indexedDB.open("audit-cuisine-db", 1);
-      req.onupgradeneeded = () => { req.result.createObjectStore("audits", { keyPath:"id" }); };
-      req.onsuccess = () => { db = req.result; resolve(true); };
+      const req = indexedDB.open("audit-cuisine-db", 2);
+      req.onupgradeneeded = () => {
+        // version 2 : ajout du magasin « resumes ». Le magasin « audits » existant n'est pas touché.
+        const base = req.result;
+        if(!base.objectStoreNames.contains("audits")) base.createObjectStore("audits", { keyPath:"id" });
+        if(!base.objectStoreNames.contains("resumes")) base.createObjectStore("resumes", { keyPath:"id" });
+      };
+      req.onsuccess = () => {
+        db = req.result;
+        // une version plus récente de l'app (autre onglet) veut mettre la base à jour : on lui laisse la place
+        db.onversionchange = () => { try{ db.close(); }catch(e){} db = null; stockageHS = true; };
+        resolve(true);
+        if(demarre && stockageHS) recupererStockage().catch(console.error);   // la base a fini par s'ouvrir après le délai d'attente
+      };
       req.onerror = () => resolve(false);
-      req.onblocked = () => resolve(false);
+      req.onblocked = () => resolve(false);   // un autre onglet garde l'ancienne base ouverte ; l'ouverture reprendra quand il sera fermé
     }catch(e){ resolve(false); }
   });
 }
+// Écrit l'audit complet ET son résumé dans la même transaction (tout ou rien)
 function dbPut(rec){
-  const p = new Promise((res, rej) => { const tx = db.transaction("audits","readwrite"); tx.objectStore("audits").put(rec); tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
-  return avecDelai(p, 2500).then((r) => { if(r.etat !== "ok") stockageHS = true; return r.etat === "ok"; });
+  if(!db || !rec || !rec.id || rec._resume){
+    if(rec && rec._resume) console.warn("Enregistrement refusé : copie sans photos de l'audit", rec.id);
+    return Promise.resolve(false);
+  }
+  const p = new Promise((res, rej) => {
+    const tx = db.transaction(["audits", "resumes"], "readwrite");
+    tx.objectStore("audits").put(rec);
+    tx.objectStore("resumes").put(allege(rec));
+    tx.oncomplete = () => res(true); tx.onerror = () => rej(tx.error); tx.onabort = () => rej(tx.error);
+  });
+  return avecDelai(p, DELAI_AUDIT).then((r) => { if(r.etat !== "ok") stockageHS = true; return r.etat === "ok"; });
 }
+// Relit l'audit complet, lui applique une modification et réécrit les deux magasins, sans passer par la mémoire de l'app
+function dbMaj(id, modif){
+  if(!db) return Promise.resolve(false);
+  const p = new Promise((res, rej) => {
+    const tx = db.transaction(["audits", "resumes"], "readwrite");
+    const magasin = tx.objectStore("audits");
+    const r = magasin.get(id);
+    r.onsuccess = () => {
+      const rec = r.result;
+      if(!rec) return;
+      modif(rec);
+      magasin.put(rec);
+      tx.objectStore("resumes").put(allege(rec));
+    };
+    tx.oncomplete = () => res(true); tx.onerror = () => rej(tx.error); tx.onabort = () => rej(tx.error);
+  });
+  return avecDelai(p, DELAI_AUDIT).then((r) => r.etat === "ok");
+}
+// Lecture de tous les audits complets (lourd : photos). Ne sert plus que de secours si les résumés sont indisponibles.
 function dbAll(){
+  if(!db) return Promise.resolve(null);
   const p = new Promise((res, rej) => { const tx = db.transaction("audits","readonly"); const r = tx.objectStore("audits").getAll(); tx.oncomplete = () => res(r.result || []); tx.onerror = () => rej(tx.error); });
   return avecDelai(p, 2500).then((r) => {
     if(r.etat !== "ok"){ stockageHS = true; return null; }
     return Array.isArray(r.valeur) ? r.valeur : [];
   });
 }
+function dbLireResumes(){
+  if(!db) return Promise.resolve(null);
+  const p = new Promise((res, rej) => { const tx = db.transaction("resumes","readonly"); const r = tx.objectStore("resumes").getAll(); tx.oncomplete = () => res(r.result || []); tx.onerror = () => rej(tx.error); });
+  return avecDelai(p, DELAI_LISTE).then((r) => {
+    if(r.etat !== "ok"){ stockageHS = true; return null; }
+    return Array.isArray(r.valeur) ? r.valeur : [];
+  });
+}
 function dbGet(id){
+  if(!db) return Promise.resolve(null);
   const p = new Promise((res, rej) => { const tx = db.transaction("audits","readonly"); const r = tx.objectStore("audits").get(id); tx.oncomplete = () => res(r.result); tx.onerror = () => rej(tx.error); });
-  return avecDelai(p, 2500).then((r) => r.valeur);
+  return avecDelai(p, DELAI_AUDIT).then((r) => r.valeur);
 }
 function dbDel(id){
-  const p = new Promise((res, rej) => { const tx = db.transaction("audits","readwrite"); tx.objectStore("audits").delete(id); tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
-  return avecDelai(p, 2500);
+  if(!db) return Promise.resolve(false);
+  const p = new Promise((res, rej) => {
+    const tx = db.transaction(["audits", "resumes"], "readwrite");
+    tx.objectStore("audits").delete(id);
+    tx.objectStore("resumes").delete(id);
+    tx.oncomplete = () => res(true); tx.onerror = () => rej(tx.error); tx.onabort = () => rej(tx.error);
+  });
+  return avecDelai(p, DELAI_AUDIT).then((r) => r.etat === "ok");
+}
+function dbCles(nom){
+  const p = new Promise((res, rej) => { const tx = db.transaction(nom,"readonly"); const r = tx.objectStore(nom).getAllKeys(); tx.oncomplete = () => res(r.result || []); tx.onerror = () => rej(tx.error); });
+  return avecDelai(p, 8000).then((r) => { if(r.etat !== "ok") throw new Error("lecture des identifiants impossible"); return r.valeur || []; });
+}
+// Parcourt les audits complets un par un (pour l'export), sans tout charger d'un coup
+function dbParcourir(surChaque){
+  return new Promise((res, rej) => {
+    if(!db){ rej(new Error("stockage indisponible")); return; }
+    let garde = null, fini = false;
+    const echec = (e) => { if(fini) return; fini = true; clearTimeout(garde); rej(e || new Error("lecture impossible")); };
+    const armer = () => { clearTimeout(garde); garde = setTimeout(() => echec(new Error("lecture trop longue")), 20000); };
+    const tx = db.transaction("audits", "readonly");
+    const req = tx.objectStore("audits").openCursor();
+    armer();
+    req.onsuccess = () => {
+      const curseur = req.result;
+      if(!curseur || fini) return;
+      armer();
+      try{ surChaque(curseur.value); curseur.continue(); }catch(e){ echec(e); }
+    };
+    tx.oncomplete = () => { if(fini) return; fini = true; clearTimeout(garde); res(); };
+    tx.onerror = () => echec(tx.error); tx.onabort = () => echec(tx.error);
+  });
+}
+/* Vérifie que chaque audit a son résumé. Ils manquent tous à la première ouverture après la mise à jour :
+   on les fabrique alors un par un (une seule fois), en relisant chaque audit sans jamais le modifier. */
+async function preparerResumes(surProgression){
+  const clesAudits = await dbCles("audits");
+  const clesResumes = await dbCles("resumes");
+  const ontResume = new Set(clesResumes), existent = new Set(clesAudits);
+  const manquants = clesAudits.filter((k) => !ontResume.has(k));
+  const orphelins = clesResumes.filter((k) => !existent.has(k));
+  let fait = 0;
+  for(const id of manquants){
+    if(surProgression) surProgression(fait, manquants.length);
+    const p = new Promise((res, rej) => {
+      const tx = db.transaction(["audits", "resumes"], "readwrite");
+      const r = tx.objectStore("audits").get(id);
+      r.onsuccess = () => { if(r.result) tx.objectStore("resumes").put(allege(r.result)); };
+      tx.oncomplete = () => res(true); tx.onerror = () => rej(tx.error); tx.onabort = () => rej(tx.error);
+    });
+    const r = await avecDelai(p, 15000);
+    if(r.etat !== "ok") throw new Error("résumé impossible pour l'audit " + id);
+    fait++;
+  }
+  if(orphelins.length){
+    const p = new Promise((res, rej) => {
+      const tx = db.transaction("resumes", "readwrite");
+      orphelins.forEach((id) => tx.objectStore("resumes").delete(id));
+      tx.oncomplete = () => res(true); tx.onerror = () => rej(tx.error); tx.onabort = () => rej(tx.error);
+    });
+    await avecDelai(p, 8000);
+  }
+}
+// Liste pour l'accueil : les résumés (rapide). En secours seulement, l'ancienne lecture complète.
+async function dbAllLege(){
+  if(stockageHS || !db) return cache;
+  if(resumesPrets){
+    const resumes = await dbLireResumes();
+    return resumes === null ? cache : resumes.map(assainir);
+  }
+  const liste = await dbAll();
+  if(liste === null) return cache;
+  return liste.map((a) => assainir(allege(a)));
+}
+async function chargerListe(surProgression){
+  if(stockageHS || !db) return cache;
+  if(!resumesPrets){
+    try{ await preparerResumes(surProgression); resumesPrets = true; }
+    catch(e){ console.error(e); }
+  }
+  return dbAllLege();
+}
+/* Charge l'audit complet (avec photos). Ne renvoie jamais la copie sans photos de la liste :
+   si la lecture échoue, on renonce plutôt que de risquer d'écraser l'original. */
+async function chargerComplet(id){
+  if(db){
+    let complet = await dbGet(id);
+    if(!complet){ await new Promise((r) => setTimeout(r, 400)); complet = await dbGet(id); }
+    if(complet && !complet._resume) return assainir(complet);
+  }
+  const enMemoire = cache.find((a) => a.id === id);
+  if(enMemoire && !enMemoire._resume) return assainir(enMemoire);   // audit créé pendant le mode mémoire
+  return null;
+}
+/* Le stockage redevient disponible (bouton « Réessayer », ou base ouverte en retard) :
+   on enregistre d'abord ce qui n'existait qu'en mémoire, puis on recharge la liste. */
+async function recupererStockage(){
+  if(!db){ toast("Stockage toujours indisponible — fermez les autres onglets de l'app"); return; }
+  const enMemoire = cache.filter((a) => a && !a._resume);
+  stockageHS = false;
+  for(const a of enMemoire){ await dbPut(a); }
+  cache = await chargerListe();
+  if(state.view === "list") renderList();
 }
 
 /* =====================================================================
    ÉTAT
    ===================================================================== */
 const state = { view:"list", auditId:null, sec:0, autoJump:true, photoQid:null, viewer:null,
-  fq:0, suiviTab:"evolution", suiviResto:null, grpMois:null, grilleSec:0 };
-let current = null;         // audit en cours d'édition
-let cache = [];             // liste des audits
+  fq:0, suiviTab:"evolution", suiviResto:null, grpMois:null, grilleSec:0, filtre:"tout" };
+let current = null;         // audit en cours d'édition (complet, avec photos)
+let cache = [];             // liste des audits (résumés sans photos)
 let saveTimer = null;
+let aEnregistrer = null;    // audit modifié qui attend son enregistrement
 
 function setSaveStatus(st){
   const el = document.getElementById("saveState");
@@ -537,34 +799,31 @@ function setSaveStatus(st){
 function scheduleSave(){
   if(!current) return;
   current.updatedAt = Date.now();
+  aEnregistrer = current;       // on retient l'audit lui-même : « current » peut changer avant la fin du délai
   setSaveStatus("saving");
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(async () => {
-    try{
-      let okPut = false;
-      if(db){ okPut = await dbPut(current); setSaveStatus(okPut ? "saved" : "error"); }
-      const gs = globalStats(current);
-      if(gs.done === TOTAL_Q && !current.completedAt) current.completedAt = Date.now();
-      else if(gs.done < TOTAL_Q) delete current.completedAt;
-      if(reglages().autoCloud !== false){
-        const complet = gs.done === TOTAL_Q;
-        const dernier = Math.max(current.cloudOk || 0, current.cloudDernier || 0);
-        const due = (complet && (!current.cloudOk || Date.now() - current.cloudOk > 60000))
-                 || (!complet && (!current.cloudDernier || Date.now() - current.cloudDernier > 120000));
-        if(due){
-          cloudSauver(current, true)
-            .then(() => {
-              current.cloudDernier = Date.now();
-              if(complet) current.cloudOk = Date.now();
-              dbPut(current).catch(() => {});
-              if(complet) toast("☁️ Audit complet sauvegardé dans votre Drive");
-            })
-            .catch(() => { if(complet) toast("⚠️ Sauvegarde en ligne impossible — réessayez plus tard"); });
-        }
-      }
-    }
-    catch(e){ console.error(e); setSaveStatus("error"); }
-  }, 300);
+  saveTimer = setTimeout(sauverMaintenant, 300);
+}
+/* Enregistre tout de suite ce qui attend. Appelé à la fin du délai, mais aussi avant de quitter
+   l'audit ou l'app, pour qu'aucune réponse ne reste en suspens. */
+function sauverMaintenant(){
+  clearTimeout(saveTimer); saveTimer = null;
+  const audit = aEnregistrer; aEnregistrer = null;
+  if(!audit) return Promise.resolve(true);
+  return enregistrer(audit);
+}
+async function enregistrer(audit){
+  try{
+    const gs = globalStats(audit);
+    // l'heure de fin est posée AVANT l'écriture, pour être enregistrée avec la dernière réponse
+    if(gs.done === TOTAL_Q){ if(!audit.completedAt) audit.completedAt = Date.now(); }
+    else delete audit.completedAt;
+    const ok = await dbPut(audit);
+    if(audit === current) setSaveStatus(ok ? "saved" : "error");
+    cloudAuto(audit);
+    return ok;
+  }
+  catch(e){ console.error(e); if(audit === current) setSaveStatus("error"); return false; }
 }
 
 /* =====================================================================
@@ -693,7 +952,7 @@ function renderPhotoRow(qid){
   }
   el.innerHTML = photos.map((p, i) =>
     `<span class="phwrap">
-       <img class="ph" src="${p}" data-action="view-photo" data-qid="${qid}" data-i="${i}" alt="photo">
+       <img class="ph" src="${esc(p)}" data-action="view-photo" data-qid="${qid}" data-i="${i}" alt="photo">
        <button class="phdel" data-action="del-photo" data-qid="${qid}" data-i="${i}" aria-label="Supprimer">×</button>
      </span>`).join("") +
     `<button class="addph" data-action="add-photo" data-qid="${qid}">🖼️ Galerie</button>
@@ -703,7 +962,7 @@ function renderPhotoRow(qid){
 /* ---- Graphiques SVG (sans dépendance) ---- */
 function svgLigne(serie, fmt){
   const pts = serie.filter((p) => typeof p.val === "number");
-  if(pts.length < 2) return `<div class="empty">Pas assez d'audits pour tracer une courbe.</div>`;
+  if(pts.length < 2) return `<div class="empty">Il faut au moins deux audits terminés pour tracer une courbe.</div>`;
   const vals = pts.map((p) => p.val);
   let min = Math.min(...vals), max = Math.max(...vals);
   if(min === max){ min -= 1; max += 1; }
@@ -759,6 +1018,13 @@ function dateCourt(iso){
    ===================================================================== */
 const app = document.getElementById("app");
 
+// La barre des sections se colle juste sous l'en-tête, dont la hauteur varie (titre sur une ou plusieurs lignes)
+function ajusterBarres(){
+  const tb = document.querySelector(".topbar");
+  if(tb) document.documentElement.style.setProperty("--haut-barre", Math.floor(tb.getBoundingClientRect().height) + "px");
+}
+window.addEventListener("resize", ajusterBarres);
+
 function render(){
   if(state.view === "list") renderList();
   else if(state.view === "audit") renderAudit();
@@ -768,6 +1034,20 @@ function render(){
 }
 
 /* ---------- Accueil : liste des audits ---------- */
+function metaCarte(a, gs){
+  return `${esc(fmtDate(a.date))} · ${gs.done}/${TOTAL_Q} répondues${enLigneAJour(a) ? " · ☁️" : ""}`;
+}
+// Met à jour le symbole ☁️ d'une carte sans redessiner toute la liste (un envoi peut finir pendant qu'on la consulte)
+function majCarteEnLigne(id){
+  if(state.view !== "list") return;
+  const a = cache.find((x) => x.id === id);
+  const tete = Array.from(document.querySelectorAll(".card-head")).find((el) => el.dataset.id === id);
+  if(!a || !tete) return;
+  const meta = tete.querySelector(".meta");
+  if(meta) meta.innerHTML = metaCarte(a, globalStats(a));
+  const bouton = tete.parentElement.querySelector('[data-action="cloud-save"]');
+  if(bouton) bouton.textContent = enLigneAJour(a) ? "☁️✓" : "☁️";
+}
 function renderList(){
   current = null;
   cache.sort((a,b) => (b.updatedAt||0) - (a.updatedAt||0));
@@ -794,7 +1074,7 @@ function renderList(){
   }
   if(enCours){
     const gs = globalStats(enCours);
-    html += `<button class="btn ghost block" data-action="open-audit" data-id="${enCours.id}" style="margin-top:8px;">
+    html += `<button class="btn ghost block" data-action="open-audit" data-id="${esc(enCours.id)}" style="margin-top:8px;">
       ▶ Reprendre : ${esc(enCours.restaurant || "Audit")} · ${gs.done}/${TOTAL_Q} répondues</button>`;
   }
   if(cache.length === 0){
@@ -804,9 +1084,12 @@ function renderList(){
     const gs = globalStats(a);
     const ic = interp(gs.score);
     const nbCrit = criticalsNC(a).length;
-    const anterieurs = cache.filter((x) => x.id !== a.id
+    const idc = esc(a.id);
+    const termine = auditTermine(a);
+    // l'écart avec l'audit précédent n'a de sens qu'entre deux audits terminés
+    const anterieurs = !termine ? [] : cache.filter((x) => x.id !== a.id
       && (x.restaurant || "").trim() === (a.restaurant || "").trim()
-      && globalStats(x).score !== null
+      && globalStats(x).score !== null && auditTermine(x)
       && ((x.date || "") < (a.date || "") || ((x.date || "") === (a.date || "") && (x.createdAt || 0) < (a.createdAt || 0))))
       .sort((x, y) => ((y.date || "") + y.createdAt).localeCompare((x.date || "") + x.createdAt));
     let deltaHtml = "";
@@ -819,21 +1102,21 @@ function renderList(){
     }
     html += `
     <div class="card">
-      <div class="card-head" data-action="open-audit" data-id="${a.id}">
+      <div class="card-head" data-action="open-audit" data-id="${idc}">
         <div style="flex:1; min-width:0;">
           <p class="card-title">${esc(a.restaurant || "Audit sans nom")}${nbCrit ? ` <span style="color:var(--bad);">⚠️ critique</span>` : ""}${a.suiviDe ? ` <span style="color:var(--warn); font-size:12px;">🔁 contre-visite</span>` : ""}</p>
-          <div class="meta">${fmtDate(a.date)} · ${gs.done}/${TOTAL_Q} répondues${a.cloudOk ? " · ☁️" : ""}</div>
+          <div class="meta">${metaCarte(a, gs)}</div>
           <div class="bar"><i style="width:${gs.pct}%; background:${ic.color};"></i></div>
         </div>
         <span class="scorechip" style="background:${ic.color};">${gs.score === null ? "—" : Math.round(gs.score) + "%"}${deltaHtml}</span>
       </div>
       <div class="row-actions">
-        <button class="btn ghost" data-action="open-audit" data-id="${a.id}">${gs.done < TOTAL_Q ? "✏️ Continuer" : "📂 Ouvrir"}</button>
-        <button class="btn ghost" data-action="open-report" data-id="${a.id}">📊 Rapport</button>
-        <button class="btn ghost" data-action="suivi-audit" data-id="${a.id}">🔁 Contre-visite</button>
-        <button class="btn ghost" data-action="cloud-save" data-id="${a.id}" title="Sauvegarder en ligne">${a.cloudOk ? "☁️✓" : "☁️"}</button>
-        <button class="btn ghost" data-action="dup-audit" data-id="${a.id}">⧉ Dupliquer</button>
-        <button class="btn danger" data-action="del-audit" data-id="${a.id}">🗑</button>
+        <button class="btn ghost" data-action="open-audit" data-id="${idc}">${gs.done < TOTAL_Q ? "✏️ Continuer" : "📂 Ouvrir"}</button>
+        <button class="btn ghost" data-action="open-report" data-id="${idc}">📊 Rapport</button>
+        <button class="btn ghost" data-action="suivi-audit" data-id="${idc}">🔁 Contre-visite</button>
+        <button class="btn ghost" data-action="cloud-save" data-id="${idc}" title="Sauvegarder en ligne">${enLigneAJour(a) ? "☁️✓" : "☁️"}</button>
+        <button class="btn ghost" data-action="dup-audit" data-id="${idc}">⧉ Dupliquer</button>
+        <button class="btn danger" data-action="del-audit" data-id="${idc}">🗑</button>
       </div>
     </div>`;
   }
@@ -883,7 +1166,7 @@ function qCardHtml(q, num, audit){
       <span class="qnum">${num}</span>
       <div class="qtext">${esc(q.t)}${q.crit ? ` <span style="color:var(--bad); font-weight:800;">🚨</span>` : ""}</div>
     </div>
-    ${rem ? `<div class="rappel">🔁 Audit du ${fmtDate(rem.date)} : ${esc(rem.note || "point non conforme")}</div>` : ""}
+    ${rem ? `<div class="rappel">🔁 Audit du ${esc(fmtDate(rem.date))} : ${esc(rem.note || "point non conforme")}</div>` : ""}
     ${q.crit && defaut && !photos.length && noteVal.trim().length < 15 ? `<button class="critphoto" data-action="add-cam" data-qid="${q.id}">📸 Photo requise pour cette non-conformité critique — appuyez ici</button>` : ""}
     <div class="seg">
       <button class="b b-oui ${a === "oui" ? "sel" : ""}" data-action="answer" data-qid="${q.id}" data-v="oui">👍 <span>Oui</span></button>
@@ -913,7 +1196,7 @@ function qCardHtml(q, num, audit){
     <div class="phrow" id="ph-${q.id}">
       ${photos.map((p, i) => `
         <span class="phwrap">
-          <img class="ph" src="${p}" data-action="view-photo" data-qid="${q.id}" data-i="${i}" alt="photo">
+          <img class="ph" src="${esc(p)}" data-action="view-photo" data-qid="${q.id}" data-i="${i}" alt="photo">
           <button class="phdel" data-action="del-photo" data-qid="${q.id}" data-i="${i}" aria-label="Supprimer">×</button>
         </span>`).join("")}
       <button class="addph" data-action="add-photo" data-qid="${q.id}">🖼️ Galerie</button>
@@ -921,9 +1204,10 @@ function qCardHtml(q, num, audit){
     </div>
   </div>`;
 }
-function renderAudit(){
+function renderAudit(garder){   // garder = true : mise à jour sur place, sans remonter en haut de la section
   const audit = current;
   if(!audit){ state.view = "list"; return render(); }
+  const yAvant = window.scrollY;
   const sec = SECTIONS[state.sec];
   const gs = globalStats(audit);
   const st = sectionStats(sec, audit);
@@ -954,6 +1238,10 @@ function renderAudit(){
       if(state.filtre === "nc" && !nonConforme) continue;
       cards += qCardHtml(q, num, audit);
     }
+    if(!cards && (state.filtre === "arep" || state.filtre === "nc")){
+      cards = `<div class="empty">Aucune question ${state.filtre === "nc" ? "non conforme" : "sans réponse"} dans cette section.<br>
+        <button class="btn ghost" data-action="filtre" data-v="tout" style="margin-top:12px;">Tout afficher</button></div>`;
+    }
   }
 
   const prev = state.sec > 0 ? SECTIONS[state.sec - 1] : null;
@@ -979,7 +1267,7 @@ function renderAudit(){
       <button class="tb-back" data-action="back-home">←</button>
       <div class="tb-title" data-action="edit-info" style="cursor:pointer;">
         <b>${esc(audit.restaurant || "Audit")}</b>
-        <small>${fmtDate(audit.date)} · ${esc(audit.auditor || "")} ${audit.auditor ? "·" : ""} <u>modifier</u></small>
+        <small>${esc(fmtDate(audit.date))} · ${esc(audit.auditor || "")} ${audit.auditor ? "·" : ""} <u>modifier</u></small>
       </div>
       <span class="scorechip" id="hScore" style="background:${gic.color};">${gs.score === null ? "—" : Math.round(gs.score) + "%"}</span>
       <button class="tb-back" data-action="open-report-current" title="Voir le rapport">📊</button>
@@ -1009,6 +1297,9 @@ function renderAudit(){
 
   const sw = document.getElementById("secWarn");
   if(sw && st.done < st.total) sw.classList.remove("hide");
+
+  ajusterBarres();
+  if(garder){ window.scrollTo(0, yAvant); return; }
 
   window.scrollTo(0, 0);
   if(!modeFocus && state.autoJump){
@@ -1064,6 +1355,7 @@ function renderReport(){
   const off = gs.score === null ? circ : circ * (1 - gs.score / 100);
   const logo = reglages().logo;
   const critiques = criticalsNC(audit);
+  const termine = auditTermine(audit);   // tant que l'audit n'est pas terminé, le score n'est qu'indicatif
 
   let secRows = "";
   SECTIONS.forEach((s, i) => {
@@ -1097,7 +1389,7 @@ function renderReport(){
         ${note ? `<p class="nc-note">📝 ${esc(note)}</p>` : ""}
         ${(act.echeance || act.quand) ? `<p class="nc-note">📌 À traiter : ${esc(act.echeance || (act.quand ? "pour le " + fmtDate(act.quand) : "—"))}</p>` : ""}
         ${q.crit && !photos.length ? `<p class="nc-note" style="background:#fff7ed; color:#9a3412;">📸 Photo recommandée pour étayer cette non-conformité critique</p>` : ""}
-        ${photos.length ? `<div class="nc-photos">${photos.map((p, j) => `<img src="${p}" data-action="view-photo" data-qid="${q.id}" data-i="${j}" alt="photo">`).join("")}</div>` : ""}
+        ${photos.length ? `<div class="nc-photos">${photos.map((p, j) => `<img src="${esc(p)}" data-action="view-photo" data-qid="${q.id}" data-i="${j}" alt="photo">`).join("")}</div>` : ""}
       </div>`;
     }
     nc += `</div>`;
@@ -1106,12 +1398,12 @@ function renderReport(){
   app.innerHTML = `
   <div class="topbar noprint"><div class="tb-in">
     <button class="tb-back" data-action="back-from-report">←</button>
-    <div class="tb-title"><b>Rapport d'audit</b><small>${esc(audit.restaurant || "")} · ${fmtDate(audit.date)}</small></div>
+    <div class="tb-title"><b>Rapport d'audit</b><small>${esc(audit.restaurant || "")} · ${esc(fmtDate(audit.date))}</small></div>
   </div></div>
   <div class="wrap">
     ${critiques.length ? `<div class="crit-banner">🚨 ${critiques.length} non-conformité${critiques.length > 1 ? "s" : ""} critique${critiques.length > 1 ? "s" : ""} HACCP — action immédiate requise, quel que soit le score global</div>` : ""}
     <div class="rep-hero">
-      ${logo ? `<img class="rep-logo" src="${logo}" alt="logo">` : ""}
+      ${logo ? `<img class="rep-logo" src="${esc(logo)}" alt="logo">` : ""}
       <div class="gauge">
         <svg width="150" height="150" viewBox="0 0 150 150">
           <circle cx="75" cy="75" r="${r}" fill="none" stroke="#e2e8f0" stroke-width="13"/>
@@ -1121,12 +1413,12 @@ function renderReport(){
         <div class="gval"><b style="color:${ic.color};">${gs.score === null ? "—" : Math.round(gs.score) + "%"}</b>
         <small>${gs.done}/${TOTAL_Q} questions</small></div>
       </div>
-      <div class="interp" style="background:${ic.color};">${ic.label}</div>
+      <div class="interp" style="background:${termine ? ic.color : "#64748b"};">${termine ? ic.label : "Score provisoire"}</div>
       ${gs.veto ? `<div class="meta" style="margin-top:8px; color:var(--bad); font-weight:700;">⚖️ ${esc(gs.veto)}${gs.scoreBrut !== null ? " — score brut : " + Math.round(gs.scoreBrut) + " %" : ""}</div>` : ""}
       ${gs.done < TOTAL_Q ? `<div class="meta" style="margin-top:8px;">⚠️ Audit incomplet : score calculé sur les réponses saisies</div>` : ""}
     </div>
     <p class="rep-meta">Restaurant : <b>${esc(audit.restaurant || "—")}</b> · Auditeur : <b>${esc(audit.auditor || "—")}</b><br>
-    ${fmtDate(audit.date)} · N/A exclu du calcul, comme les « sans réponse »</p>
+    ${esc(fmtDate(audit.date))} · N/A exclu du calcul, comme les « sans réponse »</p>
     ${(audit.startedAt && audit.completedAt) ? `<p class="rep-meta">⏱️ Audit réalisé de ${new Date(audit.startedAt).toLocaleTimeString("fr-FR", { hour:"2-digit", minute:"2-digit" })} à ${new Date(audit.completedAt).toLocaleTimeString("fr-FR", { hour:"2-digit", minute:"2-digit" })} (${Math.floor((audit.completedAt - audit.startedAt) / 3600000)} h ${String(Math.round((audit.completedAt - audit.startedAt) % 3600000 / 60000)).padStart(2, "0")})</p>` : ""}
     ${secRows}
     <div class="rep-actions noprint">
@@ -1162,8 +1454,15 @@ function posSur(cv, e){
 function initSignatures(audit){
   document.querySelectorAll(".sigpad").forEach((cv) => {
     const role = cv.dataset.role;
+    // L'image enregistrée prend les proportions de la zone affichée : la signature n'est plus étirée dans le rapport
+    const zone = cv.getBoundingClientRect();
+    const densite = Math.min(window.devicePixelRatio || 1, 3);
+    if(zone.width > 0 && zone.height > 0){
+      cv.width = Math.round(zone.width * densite);
+      cv.height = Math.round(zone.height * densite);
+    }
     const ctx = cv.getContext("2d");
-    ctx.lineWidth = 2.5; ctx.lineCap = "round"; ctx.strokeStyle = "#0f172a";
+    ctx.lineWidth = 2 * densite; ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.strokeStyle = "#0f172a";
     const sig = (audit.signatures || {})[role];
     if(sig){ const img = new Image(); img.onload = () => ctx.drawImage(img, 0, 0, cv.width, cv.height); img.src = sig; }
     let dessine = false;
@@ -1178,13 +1477,15 @@ function initSignatures(audit){
       const pos = posSur(cv, e);
       ctx.lineTo(pos.x, pos.y); ctx.stroke();
     };
-    cv.onpointerup = () => {
+    const fin = () => {
       if(!dessine) return;
       dessine = false;
       audit.signatures = audit.signatures || {};
       audit.signatures[role] = cv.toDataURL("image/png");
       scheduleSave();
     };
+    cv.onpointerup = fin;
+    cv.onpointercancel = fin;   // geste interrompu par le système : on garde quand même le tracé
   });
 }
 
@@ -1231,7 +1532,7 @@ function modalReglages(){
     <h3>Réglages</h3>
     <div class="field"><label>Logo du rapport (photo/image)</label>
       <input id="fLogo" type="file" accept="image/*">
-      ${r.logo ? `<img src="${r.logo}" style="max-height:60px; margin-top:8px; border:1px solid #e2e8f0; border-radius:8px;">` : ""}</div>
+      ${r.logo ? `<img src="${esc(r.logo)}" style="max-height:60px; margin-top:8px; border:1px solid #e2e8f0; border-radius:8px;">` : ""}</div>
     <div class="setrow"><input id="fFocus" type="checkbox" ${r.focus ? "checked" : ""}>
       <label for="fFocus" style="margin:0;">Mode focus : une question par écran 👆</label></div>
     <p class="meta" style="margin:8px 0;">En mode focus, répondez et l'app avance toute seule vers la prochaine question à contrôler. On peut aussi glisser avec le doigt.</p>
@@ -1247,10 +1548,10 @@ function modalReglages(){
     <div class="field"><label>Clé du relais</label>
       <input id="fCleCloud" type="text" value="${esc(r.cle || CLE_CLOUD_DEFAUT)}" placeholder="••••••••" autocomplete="off"></div>
     <div class="setrow"><input id="fAutoCloud" type="checkbox" ${r.autoCloud !== false ? "checked" : ""}>
-      <label for="fAutoCloud" style="margin:0;">Sauvegarder en ligne dès qu'un audit est complet</label></div>
+      <label for="fAutoCloud" style="margin:0;">Sauvegarder en ligne automatiquement (pendant l'audit, puis à la fin)</label></div>
     <button class="btn ghost block" data-action="cloud-restore">☁️ Restaurer depuis le Drive</button>
     <button class="btn ghost block" data-action="reparer" style="margin-top:8px;">🧹 Réparer l'affichage (cache de l'app)</button>
-    <p class="meta" style="margin:8px 0 0;">Les audits complets sont copiés dans votre Google Drive (dossier « Audit Cuisine Sauvegardes ») — à l'abri même si le téléphone est perdu.</p>
+    <p class="meta" style="margin:8px 0 0;">Les audits sont copiés dans votre Google Drive (dossier « Audit Cuisine Sauvegardes ») pendant la saisie, puis une fois terminés — à l'abri même si le téléphone est perdu.</p>
     <button class="btn primary block" data-action="close-modal" style="margin-top:10px;">Fermer</button>`);
 }
 function openViewer(qid, i){
@@ -1259,7 +1560,7 @@ function openViewer(qid, i){
   if(!p) return;
   state.viewer = { qid, i };
   overlay.innerHTML = `<div class="viewer" data-action="close-viewer">
-    <img src="${p}" alt="photo">
+    <img src="${esc(p)}" alt="photo">
     <div class="viewer-actions">
       <button class="btn primary" data-action="ann-open" data-qid="${qid}" data-i="${i}">✏️ Annoter</button>
       <button class="btn danger" data-action="del-photo-viewer">🗑 Supprimer</button>
@@ -1278,11 +1579,20 @@ function download(blob, name){
 function safeName(s){ return String(s || "audit").replace(/[^\w\- àâäéèêëîïôöùûüç]/gi, "").replace(/\s+/g, "-"); }
 
 async function exportJSON(){
-  let complet = (db && !stockageHS) ? await dbAll() : cache;
-  if(!complet || (!complet.length && cache.length)) complet = cache;
-  const data = JSON.stringify({ app:"audit-cuisine", version:1, exports:complet }, null, 1);
-  download(new Blob([data], { type:"application/json" }), "audit-cuisine-sauvegarde-" + todayISO() + ".json");
-  toast("Sauvegarde téléchargée ✓");
+  await sauverMaintenant();
+  toast("Préparation de la sauvegarde…");
+  // Le fichier est assemblé audit par audit, toujours à partir des audits complets (avec photos).
+  // Si la lecture échoue, on ne télécharge rien plutôt qu'une sauvegarde incomplète.
+  const morceaux = ['{"app":"audit-cuisine","version":1,"exports":['];
+  const vus = {};
+  let n = 0;
+  const ajouter = (rec) => { if(!rec || rec._resume || vus[rec.id]) return; vus[rec.id] = true; morceaux.push((n ? "," : "") + JSON.stringify(rec)); n++; };
+  if(db) await dbParcourir(ajouter);
+  cache.forEach(ajouter);   // audits créés pendant un « mode mémoire » et pas encore dans la base
+  if(n === 0 && (stockageHS || !db)) throw new Error("stockage de l'appareil indisponible");   // pas de sauvegarde vide trompeuse
+  morceaux.push("]}");
+  download(new Blob(morceaux, { type:"application/json" }), "audit-cuisine-sauvegarde-" + todayISO() + ".json");
+  toast("Sauvegarde téléchargée ✓ (" + n + " audit" + (n > 1 ? "s" : "") + ")");
 }
 function exportCSV(){
   if(!current) return;
@@ -1306,6 +1616,7 @@ function buildReportHtml(audit){
   const gs = globalStats(audit);
   const ic = interp(gs.score);
   const logo = reglages().logo;
+  const termine = auditTermine(audit);
   let body = "";
   SECTIONS.forEach((s, i) => {
     const st = gs.parts[i];
@@ -1324,18 +1635,18 @@ function buildReportHtml(audit){
       ${audit.notes[q.id] ? `<div class="nn">${esc(audit.notes[q.id])}</div>` : ""}
       ${(act.echeance || act.quand) ? `<div class="nn">📌 À traiter : ${esc(act.echeance || (act.quand ? "pour le " + fmtDate(act.quand) : "—"))}</div>` : ""}
       ${q.crit && !photos.length ? `<div class="nn" style="background:#fff7ed; color:#9a3412;">📸 Photo recommandée pour étayer cette non-conformité critique</div>` : ""}
-      ${photos.length ? `<div>${photos.map(p => `<img src="${p}">`).join("")}</div>` : ""}</div>`;
+      ${photos.length ? `<div>${photos.map(p => `<img src="${esc(p)}">`).join("")}</div>` : ""}</div>`;
     if(act.echeance || act.quand){
       planLignes += `<tr><td>${esc(q.t)}</td><td>${esc(act.echeance || (act.quand ? fmtDate(act.quand) : "—"))}</td></tr>`;
     }
   }));
-  const logoHtml = logo ? `<img src="${logo}" style="max-height:70px; display:block; margin:0 auto 10px;">` : "";
+  const logoHtml = logo ? `<img src="${esc(logo)}" style="max-height:70px; display:block; margin:0 auto 10px;">` : "";
   return `<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8">
   <title>Audit ${esc(audit.restaurant)} — ${esc(audit.date)}</title>
   <style>
     body{font-family:-apple-system,"Segoe UI",Roboto,Arial,sans-serif;color:#0f172a;max-width:760px;margin:24px auto;padding:0 16px;}
     h1{font-size:24px;margin:0 0 4px;} .sub{color:#64748b;font-size:14px;margin-bottom:20px;}
-    .score{font-size:44px;font-weight:800;color:${ic.color};} .ilabel{display:inline-block;background:${ic.color};color:#fff;
+    .score{font-size:44px;font-weight:800;color:${ic.color};} .ilabel{display:inline-block;background:${termine ? ic.color : "#64748b"};color:#fff;
     padding:5px 14px;border-radius:999px;font-weight:700;font-size:14px;}
     table{width:100%;border-collapse:collapse;margin:18px 0;font-size:14px;}
     td,th{border-bottom:1px solid #e2e8f0;padding:8px 6px;text-align:left;}
@@ -1351,7 +1662,7 @@ function buildReportHtml(audit){
   <h1>🧑‍🍳 Audit Cuisine — ${esc(audit.restaurant || "")}</h1>
   <div class="sub">${esc(audit.date ? fmtDate(audit.date) : "")} · Auditeur : ${esc(audit.auditor || "—")} · ${gs.done}/${TOTAL_Q} questions traitées
   ${(audit.startedAt && audit.completedAt) ? ` · ⏱️ de ${new Date(audit.startedAt).toLocaleTimeString("fr-FR", { hour:"2-digit", minute:"2-digit" })} à ${new Date(audit.completedAt).toLocaleTimeString("fr-FR", { hour:"2-digit", minute:"2-digit" })}` : ""}</div>
-  <div><span class="score">${gs.score === null ? "—" : Math.round(gs.score) + " %"}</span> &nbsp;<span class="ilabel">${ic.label}</span></div>
+  <div><span class="score">${gs.score === null ? "—" : Math.round(gs.score) + " %"}</span> &nbsp;<span class="ilabel">${termine ? ic.label : "Score provisoire"}</span></div>
   ${gs.veto ? `<p style="color:#b91c1c;font-weight:700;font-size:13px;">⚖️ ${esc(gs.veto)}${gs.scoreBrut !== null ? " — score brut : " + Math.round(gs.scoreBrut) + " %" : ""}</p>` : ""}
   <table><tr><th>Section</th><th>Score</th><th>Détail</th></tr>${body}</table>
   ${criticalsNC(audit).length ? `<div style="background:#dc2626;color:#fff;border-radius:10px;padding:10px 14px;font-weight:800;margin:14px 0;">🚨 ${criticalsNC(audit).length} non-conformité(s) critique(s) HACCP — action immédiate requise</div>` : ""}
@@ -1360,8 +1671,8 @@ function buildReportHtml(audit){
   <table><tr><th>Point</th><th>Échéance</th></tr>${planLignes}</table>` : ""}
   ${(audit.signatures && (audit.signatures.auditeur || audit.signatures.responsable)) ? `
   <div style="display:flex; gap:24px; margin-top:18px; flex-wrap:wrap;">
-    ${audit.signatures.auditeur ? `<div><div style="font-size:12px;color:#64748b;">Signature auditeur</div><img src="${audit.signatures.auditeur}" style="max-width:230px; border-bottom:1px solid #cbd5e1;"></div>` : ""}
-    ${audit.signatures.responsable ? `<div><div style="font-size:12px;color:#64748b;">Signature responsable</div><img src="${audit.signatures.responsable}" style="max-width:230px; border-bottom:1px solid #cbd5e1;"></div>` : ""}
+    ${audit.signatures.auditeur ? `<div><div style="font-size:12px;color:#64748b;">Signature auditeur</div><img src="${esc(audit.signatures.auditeur)}" style="max-width:230px; border-bottom:1px solid #cbd5e1;"></div>` : ""}
+    ${audit.signatures.responsable ? `<div><div style="font-size:12px;color:#64748b;">Signature responsable</div><img src="${esc(audit.signatures.responsable)}" style="max-width:230px; border-bottom:1px solid #cbd5e1;"></div>` : ""}
   </div>` : ""}
   <p class="legend">Score global = moyenne des ${SECTIONS.length} scores de section. Barème : 95–100 Excellent · 90–94 Très bien · 80–89 Conforme ·
   70–79 À améliorer · 60–69 Insuffisant · &lt;60 Audit à refaire d'urgence.<br>Rapport généré le ${new Date().toLocaleString("fr-FR")}.</p>
@@ -1382,19 +1693,137 @@ async function shareReport(){
   toast("Rapport téléchargé — envoyez-le par mail ou WhatsApp");
 }
 async function cloudPost(cle, audit){
-  const resp = await fetch(RELAIS_CLOUD, { method:"POST", body: JSON.stringify({ cle, audit }) });
-  const txt = await resp.text();
+  if(!audit || audit._resume) throw new Error("Audit incomplet (sans photos) : envoi refusé");
+  const corps = JSON.stringify({ cle, audit });   // l'état de l'audit est figé ici, au moment de l'appel
+  let txt;
+  try{
+    const resp = await fetch(RELAIS_CLOUD, { method:"POST", body: corps });
+    txt = await resp.text();
+  }catch(e){ const err = new Error("Connexion au relais impossible"); err.reseau = true; throw err; }
   let data;
   try{ data = JSON.parse(txt); }
   catch(e){ throw new Error("Réponse du relais invalide — mettez à jour le relais en version 3"); }
   if(data.erreur) throw new Error(data.erreur);
   return data;
 }
-async function cloudSauver(audit, silencieux){
-  const cle = reglages().cle || CLE_CLOUD_DEFAUT;
-  await cloudPost(cle, audit);
-  audit.cloudOk = Date.now();
-  if(!silencieux) toast("☁️ Sauvegardé dans votre Drive ✓");
+
+/* ---- Suivi des envois en ligne ----
+   Un seul envoi à la fois par audit, et on retient quelle version est arrivée sur le Drive :
+   le symbole ☁️ ne s'affiche que si la dernière modification y est bien. */
+const envois = {};   // id → { enCours, minuterie, dernierEssai, echecs, echecReseau, echecSignale } (état de la session, non enregistré)
+function etatEnvoi(id){ return envois[id] || (envois[id] = {}); }
+function cleCloud(){ return reglages().cle || CLE_CLOUD_DEFAUT; }
+function enLigneAJour(a){
+  if(!a) return false;
+  if(a.cloudVersion) return a.cloudVersion >= (a.updatedAt || 0);
+  return !!a.cloudOk && a.cloudOk >= (a.updatedAt || 0);   // audit envoyé par une version précédente de l'app
+}
+function modifsNonEnvoyees(a){ return !!(a && (a.cloudVersion || a.cloudOk)) && !enLigneAJour(a); }
+// Note, en mémoire et dans la base, que la version « version » de l'audit est sur le Drive
+function marquerEnLigne(id, version, complet, debut){
+  const quand = Date.now();   // « debut » et « quand » encadrent l'envoi : ils servent à reconnaître notre propre fichier sur le Drive
+  const pose = (a) => { if(a && a.id === id){ a.cloudVersion = version; a.cloudDebut = debut || quand; a.cloudOk = quand; a.cloudDernier = quand; a.cloudComplet = !!complet; } };
+  pose(current);
+  cache.forEach(pose);
+  try{ majCarteEnLigne(id); }catch(e){ console.error(e); }
+  return dbMaj(id, pose);
+}
+/* Envoie l'audit complet au relais ; la promesse échoue si l'envoi échoue. */
+async function envoyerAudit(audit){
+  const e = etatEnvoi(audit.id);
+  if(e.enCours) throw new Error("Un envoi de cet audit est déjà en cours");
+  e.enCours = true; e.dernierEssai = Date.now();
+  clearTimeout(e.minuterie); e.minuterie = null;
+  const id = audit.id, version = audit.updatedAt || 0;
+  const complet = globalStats(audit).done === TOTAL_Q;
+  try{
+    await cloudPost(cleCloud(), audit);
+    e.echecs = 0; e.echecSignale = false;
+    try{ localStorage.removeItem("audit:rattrapageEchec"); }catch(err){}   // le relais répond de nouveau : le rattrapage peut reprendre
+    try{ await marquerEnLigne(id, version, complet, e.dernierEssai); }catch(err){ console.error(err); }
+    return { version, complet };
+  }catch(err){
+    e.echecs = (e.echecs || 0) + 1; e.echecReseau = !!err.reseau;
+    throw err;
+  }finally{
+    e.enCours = false;
+    try{ apresEnvoi(id); }catch(err){ console.error(err); }
+  }
+}
+/* Après un envoi, réussi ou non : s'il reste des modifications qui ne sont pas en ligne, on programme la suite. */
+function apresEnvoi(id){
+  if(reglages().autoCloud === false) return;
+  const a = (current && current.id === id) ? current : cache.find((x) => x.id === id);
+  if(a && !enLigneAJour(a)) programmerEnvoi(a);
+}
+function programmerEnvoi(a){
+  const e = etatEnvoi(a.id);
+  if(e.enCours) return;                          // la suite sera décidée à la fin de l'envoi en cours
+  const complet = globalStats(a).done === TOTAL_Q;
+  const intervalle = complet ? 60000 : 120000;   // au plus un envoi par minute (audit terminé) ou toutes les 2 min (audit en cours)
+  let attente;
+  if(e.echecs){                                  // après un échec : essais de plus en plus espacés
+    const base = e.echecReseau ? intervalle : 900000;
+    attente = Math.min(base * Math.pow(2, e.echecs - 1), 3600000) - (Date.now() - (e.dernierEssai || 0));
+  } else if(complet && !a.cloudComplet){
+    attente = 0;                                 // l'audit vient d'être terminé : la version finale part tout de suite
+  } else {
+    attente = Math.max(a.cloudDernier || 0, e.dernierEssai || 0) + intervalle - Date.now();
+  }
+  clearTimeout(e.minuterie);
+  const id = a.id;
+  e.minuterie = setTimeout(() => { e.minuterie = null; envoiAuto(id).catch(console.error); }, Math.max(0, attente));
+}
+// Envoi automatique d'un audit (ouvert ou non) dont la dernière version n'est pas en ligne
+async function envoiAuto(id){
+  if(reglages().autoCloud === false) return;
+  const e = etatEnvoi(id);
+  if(e.enCours) return;
+  let audit = (current && current.id === id) ? current : null;
+  if(!audit){
+    if(aEnregistrer && aEnregistrer.id === id) await sauverMaintenant();
+    audit = await dbGet(id);
+    if(audit) assainir(audit);
+  }
+  if(!audit || audit._resume || enLigneAJour(audit) || e.enCours) return;
+  try{
+    const r = await envoyerAudit(audit);
+    if(r.complet) toast("☁️ Audit complet sauvegardé dans votre Drive");
+  }catch(err){
+    if(!e.echecSignale && globalStats(audit).done === TOTAL_Q){
+      e.echecSignale = true;
+      toast("⚠️ Sauvegarde en ligne impossible pour l'instant — nouvel essai automatique plus tard");
+    }
+  }
+}
+// Appelé après chaque enregistrement local
+function cloudAuto(audit){
+  if(reglages().autoCloud === false || enLigneAJour(audit)) return;
+  programmerEnvoi(audit);
+}
+/* À l'ouverture de l'app (ou au retour du réseau) : renvoie en arrière-plan les audits terminés
+   dont la dernière version n'est pas sur le Drive (envoi interrompu, pas de réseau en cuisine…). */
+let rattrapageEnCours = false;
+async function rattrapageEnLigne(){
+  if(rattrapageEnCours || reglages().autoCloud === false || stockageHS || !db || navigator.onLine === false) return;
+  let blocage = 0;
+  try{ blocage = Number(localStorage.getItem("audit:rattrapageEchec") || 0); }catch(e){}
+  if(Date.now() - blocage < 6 * 3600000) return;   // le relais a refusé récemment : inutile d'insister
+  rattrapageEnCours = true;
+  try{
+    const aFaire = cache.filter((a) => a._resume && globalStats(a).done === TOTAL_Q && !enLigneAJour(a)).slice(0, 3);
+    for(const r of aFaire){
+      const e = etatEnvoi(r.id);
+      if((current && current.id === r.id) || e.enCours || e.minuterie) continue;
+      const audit = await dbGet(r.id);
+      if(!audit || audit._resume || enLigneAJour(audit) || e.enCours) continue;
+      try{ await envoyerAudit(assainir(audit)); }
+      catch(err){
+        if(!err.reseau){ try{ localStorage.setItem("audit:rattrapageEchec", String(Date.now())); }catch(e2){} }
+        break;
+      }
+    }
+  }finally{ rattrapageEnCours = false; }
 }
 async function cloudLister(){
   const cle = reglages().cle || CLE_CLOUD_DEFAUT;
@@ -1420,14 +1849,16 @@ function renderSuivi(){
     `<button class="chip ${r === state.suiviResto ? "active" : ""}" data-action="suivi-resto" data-r="${esc(r)}">${esc(r)}</button>`).join("");
 
   if(tab === "evolution"){
-    const audits = cache.filter((a) => (a.restaurant || "").trim() === state.suiviResto)
-      .sort((a, b) => (a.date || "").localeCompare(b.date || "") || (a.createdAt || 0) - (b.createdAt || 0));
-    if(!audits.length){
+    const tous = cache.filter((a) => (a.restaurant || "").trim() === state.suiviResto).sort(parDate);
+    const audits = tous.filter(auditTermine);   // seuls les audits terminés comptent dans les courbes
+    const enCours = tous.length - audits.length;
+    if(!tous.length){
       corps = `<div class="navrow">${chipsRestos}</div><div class="card"><div class="empty">Aucun audit pour ce restaurant.</div></div>`;
     } else {
       const serie = audits.map((a) => { const g = globalStats(a);
         return { label:dateCourt(a.date), val:g.score === null ? null : Math.round(g.score * 10) / 10 }; });
-      const courbe = `<div class="card"><h3>Score global dans le temps</h3>${svgLigne(serie, (v) => Math.round(v) + " %")}</div>`;
+      const courbe = `<div class="card"><h3>Score global dans le temps</h3>${svgLigne(serie, (v) => Math.round(v) + " %")}
+        ${enCours ? `<p class="meta" style="margin:8px 2px 0;">${enCours} audit(s) en cours : non compté(s) tant qu'ils ne sont pas terminés.</p>` : ""}</div>`;
       let delta = "";
       if(audits.length >= 2){
         const anc = audits[audits.length - 2], rec = audits[audits.length - 1];
@@ -1439,21 +1870,21 @@ function renderSuivi(){
             <span><b>${Math.round(s1)} %</b> → <b>${Math.round(s2)} %</b></span>
             <span class="${d >= 0 ? "up" : "down"}" style="font-weight:800;">${d >= 0 ? "▲" : "▼"} ${Math.abs(Math.round(d))}</span></div>`;
         }).join("");
-        delta = `<div class="card"><h3>Évolution par section</h3><p class="meta" style="margin:0 2px 8px;">${fmtDate(anc.date)} → ${fmtDate(rec.date)}</p>${rows}</div>`;
+        delta = `<div class="card"><h3>Évolution par section</h3><p class="meta" style="margin:0 2px 8px;">${esc(fmtDate(anc.date))} → ${esc(fmtDate(rec.date))}</p>${rows}</div>`;
       }
-      const liste = audits.map((a) => { const g = globalStats(a); const ic2 = interp(g.score);
-        return `<div class="pl-item"><span style="flex:1;">${fmtDate(a.date)}${a.suiviDe ? " 🔁" : ""}</span><span class="meta">${g.done}/${TOTAL_Q} répondues</span>
-          <span class="scorechip" style="background:${ic2.color};">${g.score === null ? "—" : Math.round(g.score) + "%"}</span></div>`; }).join("");
+      const liste = tous.map((a) => { const g = globalStats(a); const ic2 = interp(g.score); const fini = auditTermine(a);
+        return `<div class="pl-item"><span style="flex:1;">${esc(fmtDate(a.date))}${a.suiviDe ? " 🔁" : ""}</span><span class="meta">${g.done}/${TOTAL_Q} répondues</span>
+          <span class="scorechip" style="background:${fini ? ic2.color : "#94a3b8"};">${!fini ? "en cours" : (g.score === null ? "—" : Math.round(g.score) + "%")}</span></div>`; }).join("");
       corps = `<div class="navrow">${chipsRestos}</div>` + courbe + delta +
-        `<div class="card"><h3>${audits.length} audit(s) — ${esc(state.suiviResto || "")}</h3>${liste}</div>`;
+        `<div class="card"><h3>${tous.length} audit(s) — ${esc(state.suiviResto || "")}</h3>${liste}</div>`;
     }
   }
   else if(tab === "comparaison"){
     const restos = restosUniques();
+    // dernier audit terminé de chaque restaurant, d'après la date de l'audit (et non la date de dernière modification)
     const dernierScore = (r) => {
-      const list = cache.filter((a) => (a.restaurant || "").trim() === r)
-        .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-      return list.length ? globalStats(list[0]).score : null;
+      const list = cache.filter((a) => (a.restaurant || "").trim() === r && auditTermine(a)).sort(parDate);
+      return list.length ? globalStats(list[list.length - 1]).score : null;
     };
     const barres = restos.map((r) => ({ label:r, val:dernierScore(r) === null ? null : Math.round(dernierScore(r)) }))
       .sort((a, b) => (b.val === null ? -1 : b.val) - (a.val === null ? -1 : a.val));
@@ -1474,16 +1905,15 @@ function renderSuivi(){
     if(!state.grpMois || !mois.includes(state.grpMois)) state.grpMois = mois[0] || null;
     const chipsMois = mois.map((k) => {
       const d = new Date(k + "-01T12:00:00");
-      return `<button class="chip ${k === state.grpMois ? "active" : ""}" data-action="grp-mois" data-k="${k}">${d.toLocaleDateString("fr-FR", { month:"long", year:"numeric" })}</button>`;
+      return `<button class="chip ${k === state.grpMois ? "active" : ""}" data-action="grp-mois" data-k="${esc(k)}">${esc(d.toLocaleDateString("fr-FR", { month:"long", year:"numeric" }))}</button>`;
     }).join("");
-    const audits = cache.filter((a) => (a.date || "").slice(0, 7) === state.grpMois);
+    const duMois = cache.filter((a) => (a.date || "").slice(0, 7) === state.grpMois);
+    const audits = duMois.filter(auditTermine);   // seuls les audits terminés comptent
+    const enCours = duMois.length - audits.length;
     const scores = audits.map((a) => globalStats(a).score).filter((s) => s !== null);
     const moy = scores.length ? Math.round(scores.reduce((x, y) => x + y, 0) / scores.length) : null;
     const parResto = {};
-    audits.forEach((a) => {
-      const r = (a.restaurant || "?").trim();
-      if(!parResto[r] || (a.updatedAt || 0) > (parResto[r].updatedAt || 0)) parResto[r] = a;
-    });
+    audits.slice().sort(parDate).forEach((a) => { parResto[(a.restaurant || "?").trim()] = a; });   // le plus récent du mois, par date d'audit
     const barres = Object.keys(parResto).map((r) => {
       const g = globalStats(parResto[r]);
       return { label:r, val:g.score === null ? null : Math.round(g.score) };
@@ -1495,8 +1925,9 @@ function renderSuivi(){
     }));
     const topFaibles = Object.keys(faib).map((k) => ({ label:k, val:faib[k] })).sort((a, b) => b.val - a.val).slice(0, 3);
     corps = `<div class="navrow">${chipsMois}</div>
-      <div class="card"><h3>${audits.length} audit(s) — moyenne du mois : <span style="color:var(--brand);">${moy === null ? "—" : moy + " %"}</span></h3>
-      ${svgBarresH(barres, (v) => Math.round(v) + " %")}</div>
+      <div class="card"><h3>${audits.length} audit(s) terminé(s) — moyenne du mois : <span style="color:var(--brand);">${moy === null ? "—" : moy + " %"}</span></h3>
+      ${svgBarresH(barres, (v) => Math.round(v) + " %")}
+      ${enCours ? `<p class="meta" style="margin:8px 2px 0;">${enCours} audit(s) en cours : non compté(s) tant qu'ils ne sont pas terminés.</p>` : ""}</div>
       ${topFaibles.length ? `<div class="card"><h3>Points « Non » les plus fréquents du mois</h3>${svgBarresH(topFaibles, (v) => String(v))}</div>` : ""}`;
   }
 
@@ -1511,6 +1942,7 @@ function renderSuivi(){
     <button class="chip ${tab === "groupe" ? "active" : ""}" data-action="suivi-tab" data-t="groupe">👥 Groupe</button>
   </div>
   <div class="wrap">${corps}</div>`;
+  ajusterBarres();
   window.scrollTo(0, 0);
 }
 
@@ -1542,10 +1974,12 @@ function renderGrille(){
       <p class="meta">Les questions d'origine ne sont pas modifiables (vos audits restent comparables d'un mois à l'autre). Les questions ajoutées apparaissent en fin de section, dans tous les audits.</p>
     </div>
   </div>`;
+  ajusterBarres();
   window.scrollTo(0, 0);
 }
 
 let annCv = null, annCtx = null, annBase = null, annOutil = "stylo", annTraits = [], annTrace = null;
+let annEchelle = 1;   // pixels de la photo par pixel d'écran : les traits gardent la même épaisseur à l'écran
 function annRedessiner(){
   annCtx.clearRect(0, 0, annCv.width, annCv.height);
   annCtx.drawImage(annBase, 0, 0, annCv.width, annCv.height);
@@ -1553,16 +1987,16 @@ function annRedessiner(){
   for(const t of tout){
     if(t.outil === "surligne"){
       annCtx.strokeStyle = "rgba(255,214,10,.45)";
-      annCtx.lineWidth = 30;
+      annCtx.lineWidth = 30 * annEchelle;
     } else {
       annCtx.strokeStyle = "#dc2626";
-      annCtx.lineWidth = 5;
+      annCtx.lineWidth = 5 * annEchelle;
     }
     annCtx.lineCap = "round"; annCtx.lineJoin = "round";
     const pts = t.points;
     if(pts.length < 2){
       annCtx.beginPath();
-      annCtx.arc(pts[0].x, pts[0].y, t.outil === "surligne" ? 15 : 3, 0, 7);
+      annCtx.arc(pts[0].x, pts[0].y, (t.outil === "surligne" ? 15 : 3) * annEchelle, 0, 7);
       annCtx.fillStyle = annCtx.strokeStyle;
       annCtx.fill();
       continue;
@@ -1574,7 +2008,7 @@ function annRedessiner(){
     if(t.outil === "fleche" && pts.length >= 2){
       const p1 = pts[pts.length - 2], p2 = pts[pts.length - 1];
       const ang = Math.atan2(p2.y - p1.y, p2.x - p1.x);
-      const L = 24;
+      const L = 24 * annEchelle;
       annCtx.beginPath();
       annCtx.moveTo(p2.x, p2.y);
       annCtx.lineTo(p2.x - L * Math.cos(ang - 0.45), p2.y - L * Math.sin(ang - 0.45));
@@ -1606,10 +2040,12 @@ function openAnnotateur(qid, i){
   annTraits = []; annTrace = null; annOutil = "stylo";
   const img = new Image();
   img.onload = () => {
-    const maxW = Math.min(window.innerWidth - 24, 900);
-    const scale = Math.min(1, maxW / img.naturalWidth);
-    annCv.width = Math.max(1, Math.round(img.naturalWidth * scale));
-    annCv.height = Math.max(1, Math.round(img.naturalHeight * scale));
+    // On dessine à la taille réelle de la photo ; seul l'affichage est réduit (règle CSS de #annCv).
+    // Avant, la photo était ramenée à la largeur de l'écran : annoter la rendait presque illisible.
+    annCv.width = Math.max(1, img.naturalWidth);
+    annCv.height = Math.max(1, img.naturalHeight);
+    const largeurAffichee = annCv.getBoundingClientRect().width;
+    annEchelle = largeurAffichee > 0 ? Math.max(1, annCv.width / largeurAffichee) : 1;
     annBase = img;
     annRedessiner();
     annCv.onpointerdown = (e) => {
@@ -1637,34 +2073,48 @@ function openAnnotateur(qid, i){
   img.src = p;
 }
 async function cloudToutSynchro(){
-  const cle = reglages().cle || CLE_CLOUD_DEFAUT;
-  const distants = await cloudLister();
-  let pousses = 0, importes = 0;
-  const locaux = {};
+  await sauverMaintenant();
+  const distants = (await cloudLister()).filter((x) => x && typeof x.id === "string");
+  const tombes = supprimes(), vuesAvant = majVues(), vues = {};
+  let pousses = 0, importes = 0, illisibles = 0;
+  const locaux = {}, dejaTraites = {};
   cache.forEach((a) => locaux[a.id] = a);
-  for(const a of cache){
+  // 1) Envoi : ce qui n'est pas sur le Drive, ou qui a été modifié ici depuis le dernier envoi
+  for(const a of cache.slice()){
     const dist = distants.find((x) => x.id === a.id);
     const majDist = dist ? Date.parse(dist.maj) || 0 : 0;
-    if(!dist || (a.updatedAt || 0) > majDist){
-      let complet = a;
-      if(db){ const c = await dbGet(a.id); if(c) complet = c; }
-      complet.answers = complet.answers || {}; complet.notes = complet.notes || {}; complet.photos = complet.photos || {}; complet.actions = complet.actions || {};
-      await cloudPost(cle, complet);
-      pousses++;
-    }
+    if(dist && !((a.updatedAt || 0) > majDist) && !modifsNonEnvoyees(a)) continue;
+    dejaTraites[a.id] = true;
+    if(etatEnvoi(a.id).enCours) continue;            // un envoi automatique de cet audit est déjà en route
+    const complet = await chargerComplet(a.id);      // toujours l'audit complet, jamais la copie sans photos de la liste
+    if(!complet){ illisibles++; continue; }
+    await envoyerAudit(complet);
+    pousses++;
   }
+  // 2) Réception : ce qui manque ici, ou que le Drive a en plus récent, sans jamais écraser des modifications non envoyées
   for(const e of distants){
+    if(dejaTraites[e.id]) continue;
     const loc = locaux[e.id];
     const majDist = Date.parse(e.maj) || 0;
-    if(!loc || majDist > (loc.updatedAt || 0)){
-      const audit = await cloudCharger(e.id);
-      audit.answers = audit.answers || {}; audit.notes = audit.notes || {}; audit.photos = audit.photos || {}; audit.actions = audit.actions || {};
-      await dbPut(audit);
-      importes++;
+    if(!loc){
+      if(tombes[e.id] && majDist <= tombes[e.id]) continue;   // supprimé sur cet appareil, et pas modifié ailleurs depuis
+    } else {
+      if(majDist <= (loc.updatedAt || 0) || modifsNonEnvoyees(loc)) continue;
+      // le Drive n'a pas bougé depuis la dernière synchronisation : inutile de re-télécharger
+      if(vuesAvant[e.id] !== undefined && vuesAvant[e.id] === e.maj){ vues[e.id] = e.maj; continue; }
+      // la date du Drive tombe pendant notre propre envoi : c'est le fichier que cet appareil vient d'y déposer
+      if(enLigneAJour(loc) && loc.cloudDebut && majDist >= loc.cloudDebut - 15000 && majDist <= (loc.cloudOk || 0) + 15000){ vues[e.id] = e.maj; continue; }
     }
+    const audit = normaliserAudit(await cloudCharger(e.id));
+    if(!audit){ illisibles++; continue; }
+    audit.cloudVersion = audit.updatedAt; audit.cloudOk = Date.now(); audit.cloudDernier = audit.cloudOk;
+    audit.cloudComplet = globalStats(audit).done === TOTAL_Q;
+    delete audit.cloudDebut;
+    if(await dbPut(audit)){ oublierSuppression(e.id); vues[e.id] = e.maj; importes++; }
   }
+  noterMajVues(vues);
   cache = await dbAllLege();
-  return { pousses, importes };
+  return { pousses, importes, illisibles };
 }
 async function cloudRestaurer(){
   try{
@@ -1702,7 +2152,7 @@ document.body.addEventListener("click", async (e) => {
     cache.push(rec);
     dbPut(rec).catch(console.error);
     closeModal();
-    current = rec; state.view = "audit"; state.sec = 0; state.fq = 0; state.autoJump = false;
+    current = rec; state.view = "audit"; state.sec = 0; state.fq = 0; state.autoJump = false; state.filtre = "tout";
     render();
   }
   else if(act === "close-modal") closeModal();
@@ -1713,15 +2163,13 @@ document.body.addEventListener("click", async (e) => {
     scheduleSave(); closeModal(); render();
   }
   else if(act === "open-audit" || act === "open-report"){
-    let rec = cache.find(a => a.id === el.dataset.id);
-    if(!rec) return;
-    if(db){
-      let complet = await dbGet(el.dataset.id);
-      if(!complet){ await new Promise(r => setTimeout(r, 400)); complet = await dbGet(el.dataset.id); }
-      if(complet) rec = complet;
-    }
-    rec.answers = rec.answers || {}; rec.notes = rec.notes || {}; rec.photos = rec.photos || {}; rec.actions = rec.actions || {};
-    state.fq = 0;
+    if(!cache.find(a => a.id === el.dataset.id)) return;
+    await sauverMaintenant();
+    // On n'ouvre que l'audit complet. Si sa lecture échoue, on renonce : ouvrir la copie sans photos
+    // de la liste, puis l'enregistrer, effacerait les photos de l'original.
+    const rec = await chargerComplet(el.dataset.id);
+    if(!rec){ toast("Lecture de l'audit impossible pour l'instant — réessayez dans un instant"); return; }
+    state.fq = 0; state.filtre = "tout";
     current = rec;
     if(act === "open-report"){ state.view = "report"; render(); return; }
     state.view = "audit"; state.autoJump = true;
@@ -1741,7 +2189,13 @@ document.body.addEventListener("click", async (e) => {
     const rec = cache.find(a => a.id === el.dataset.id);
     if(!rec) return;
     if(!confirm("Supprimer définitivement l'audit « " + (rec.restaurant || "") + " » et ses photos ?")) return;
-    dbDel(rec.id).then(() => { cache = cache.filter(a => a.id !== rec.id); renderList(); toast("Audit supprimé"); }).catch(console.error);
+    const supprime = await dbDel(rec.id);
+    if(db && !supprime){ toast("Suppression impossible pour l'instant — réessayez dans un instant"); return; }
+    clearTimeout(etatEnvoi(rec.id).minuterie);
+    noterSuppression(rec.id);   // pour que « Tout synchroniser » ne le fasse pas revenir du Drive
+    cache = cache.filter(a => a.id !== rec.id);
+    renderList();
+    toast("Audit supprimé");
   }
   else if(act === "reparer"){
     try{
@@ -1756,12 +2210,16 @@ document.body.addEventListener("click", async (e) => {
   else if(act === "cloud-sync"){
     toast("Synchronisation…");
     cloudToutSynchro()
-      .then((r) => { toast("🔄 Synchronisé : " + r.pousses + " envoyé(s), " + r.importes + " importé(s) ✓"); renderList(); })
+      .then((r) => { toast("🔄 Synchronisé : " + r.pousses + " envoyé(s), " + r.importes + " importé(s) ✓" + (r.illisibles ? " · " + r.illisibles + " illisible(s), à réessayer" : "")); renderList(); })
       .catch((e) => toast("Erreur : " + e.message));
   }
-  else if(act === "export-json"){ exportJSON().catch((e) => toast("Erreur : " + e.message)); }
+  else if(act === "export-json"){ exportJSON().catch((e) => toast("Sauvegarde impossible pour l'instant (" + e.message + ") — aucun fichier créé, réessayez")); }
   else if(act === "import-json") document.getElementById("importInput").click();
-  else if(act === "back-home"){ if(db){ dbAllLege().then(list => { cache = list; state.view = "list"; render(); }).catch(() => renderList()); } else renderList(); }
+  else if(act === "back-home"){
+    await sauverMaintenant();            // la dernière réponse est enregistrée avant de recharger la liste
+    if(db) cache = await dbAllLege();
+    state.view = "list"; render();
+  }
   else if(act === "goto-section"){ state.sec = parseInt(el.dataset.i, 10); state.fq = 0; state.autoJump = true; renderAudit(); }
   else if(act === "answer"){
     const qid = el.dataset.qid, v = el.dataset.v;
@@ -1781,12 +2239,7 @@ document.body.addEventListener("click", async (e) => {
     if(tags) tags.classList.toggle("hide", !(nonConforme || note.value.trim()));
     const estCritique = qCourante && qCourante.crit;
     if(estCritique && nonConforme){
-      const y = window.scrollY;
-      setTimeout(() => {
-        if(state.view !== "audit") return;
-        renderAudit();
-        window.scrollTo(0, y);
-      }, 250);
+      setTimeout(() => { if(state.view === "audit" && current) renderAudit(true); }, 250);   // sur place, sans déplacer l'écran
     }
     scheduleSave(); updateLive();
     if(reglages().focus && current){
@@ -1821,7 +2274,7 @@ document.body.addEventListener("click", async (e) => {
     if(!current.photos[qid].length) delete current.photos[qid];
     scheduleSave();
     const qSup = SECTIONS[state.sec] && SECTIONS[state.sec].questions.find((x) => x.id === qid);
-    if(qSup && qSup.crit && current.answers[qid] === (qSup.inv ? "oui" : "non")){ renderAudit(); return; }
+    if(qSup && qSup.crit && current.answers[qid] === (qSup.inv ? "oui" : "non")){ renderAudit(true); return; }
     renderPhotoRow(qid);
   }
   else if(act === "open-report-current" || act === "open-report"){ state.view = "report"; render(); }
@@ -1830,33 +2283,30 @@ document.body.addEventListener("click", async (e) => {
   else if(act === "print-report") window.print();
   else if(act === "share-report") shareReport();
   else if(act === "export-csv") exportCSV();
-  else if(act === "cloud-save"){
-    let rec = cache.find((a) => a.id === el.dataset.id);
-    if(!rec) return;
-    if(db){ const complet = await dbGet(el.dataset.id); if(complet) rec = complet; }
+  else if(act === "cloud-save" || act === "cloud-save-current"){
+    await sauverMaintenant();
+    // toujours l'audit complet : jamais la copie sans photos de la liste
+    const rec = act === "cloud-save" ? await chargerComplet(el.dataset.id) : current;
+    if(!rec){ toast("Lecture de l'audit impossible pour l'instant — réessayez dans un instant"); return; }
     toast("Sauvegarde en ligne…");
-    cloudSauver(rec)
-      .then(() => {
-        const i = cache.findIndex(x => x.id === rec.id);
-        if(i >= 0) cache[i].cloudOk = rec.cloudOk;
-        dbPut(rec).catch(() => {});
-        renderList();
-      })
-      .catch((e) => toast("Erreur : " + e.message));
-  }
-  else if(act === "cloud-save-current"){
-    toast("Sauvegarde en ligne…");
-    cloudSauver(current)
-      .then(() => { dbPut(current).catch(() => {}); render(); })
+    envoyerAudit(rec)
+      .then(() => toast("☁️ Sauvegardé dans votre Drive ✓"))
       .catch((e) => toast("Erreur : " + e.message));
   }
   else if(act === "cloud-restore"){ cloudRestaurer(); }
   else if(act === "cloud-import"){
     toast("Import depuis le Drive…");
     cloudCharger(el.dataset.id)
-      .then(async (audit) => {
-        audit.answers = audit.answers || {}; audit.notes = audit.notes || {}; audit.photos = audit.photos || {}; audit.actions = audit.actions || {};
-        await dbPut(audit);
+      .then(async (brut) => {
+        const audit = normaliserAudit(brut);
+        if(!audit) throw new Error("audit illisible");
+        const local = cache.find((a) => a.id === audit.id);
+        if(remplacementRisque(local, audit) && !confirm("La version de cet appareil est plus récente, ou contient plus de photos, que celle du Drive.\n\nLa remplacer quand même par celle du Drive ?")) return;
+        audit.cloudVersion = audit.updatedAt; audit.cloudOk = Date.now(); audit.cloudDernier = audit.cloudOk;
+        audit.cloudComplet = globalStats(audit).done === TOTAL_Q;
+        delete audit.cloudDebut;
+        if(!(await dbPut(audit))) throw new Error("enregistrement impossible sur l'appareil");
+        oublierSuppression(audit.id);
         cache = await dbAllLege();
         closeModal();
         renderList();
@@ -1907,7 +2357,7 @@ document.body.addEventListener("click", async (e) => {
     cache.push(rec);
     dbPut(rec).then(() => {
       toast("Contre-visite créée — anciens Non rappelés 🔁");
-      current = rec; state.view = "audit"; state.sec = 0; state.autoJump = false; state.fq = 0;
+      current = rec; state.view = "audit"; state.sec = 0; state.autoJump = false; state.fq = 0; state.filtre = "tout";
       render();
     }).catch(console.error);
   }
@@ -1993,12 +2443,7 @@ document.body.addEventListener("click", async (e) => {
     renderAudit();
   }
   else if(act === "reessayer"){
-    stockageHS = false;
-    dbAllLege().then((list) => {
-      cache = list;
-      cache.forEach((a) => { a.actions = a.actions || {}; });
-      renderList();
-    }).catch(() => renderList());
+    recupererStockage().catch(() => renderList());
   }
   else if(act === "vetocrit"){
     const r = reglages();
@@ -2094,7 +2539,7 @@ function appliquerMesure(qid){
   let note = (current.notes[qid] || "").replace(/\s*—?\s*Mesuré\s*:\s*[^—]*$/i, "").trim();
   note = (note ? note + " — " : "") + "Mesuré : " + v.toLocaleString("fr-FR") + " " + m.unite + (conforme ? "" : " (limite " + m.seuil + " " + m.unite + ")");
   current.notes[qid] = note;
-  scheduleSave(); renderAudit();
+  scheduleSave(); renderAudit(true);   // sur place : l'écran reste sur la question dont on vient de saisir le relevé
 }
 document.getElementById("photoInput").addEventListener("change", (e) => {
   const files = Array.from(e.target.files || []);
@@ -2109,19 +2554,41 @@ document.getElementById("camInput").addEventListener("change", (e) => {
 document.getElementById("importInput").addEventListener("change", async (e) => {
   const f = e.target.files && e.target.files[0];
   e.target.value = "";
-  if(!f || !db) return;
+  if(!f) return;
+  if(!db){ toast("Import impossible : le stockage de l'appareil est indisponible"); return; }
   try{
     const data = JSON.parse(await f.text());
-    const list = Array.isArray(data) ? data : (data.exports || []);
-    let n = 0;
-    for(const rec of list){
-      if(!rec || !rec.id) continue;
-      rec.answers = rec.answers || {}; rec.notes = rec.notes || {}; rec.photos = rec.photos || {}; rec.actions = rec.actions || {};
-      await dbPut(rec); n++;
+    const list = Array.isArray(data) ? data : ((data && Array.isArray(data.exports)) ? data.exports : []);
+    const locaux = {};
+    cache.forEach((a) => locaux[a.id] = a);
+    const aImporter = [], risques = [];
+    let illisibles = 0, identiques = 0;
+    for(const brut of list){
+      const rec = normaliserAudit(brut);          // copie contrôlée : rien de ce fichier n'est repris tel quel
+      if(!rec){ illisibles++; continue; }
+      const loc = locaux[rec.id];
+      const photosLocales = loc ? (loc._resume ? (loc.nbPhotos || 0) : nbPhotos(loc)) : 0;
+      if(loc && (rec.updatedAt || 0) === (loc.updatedAt || 0) && nbPhotos(rec) === photosLocales){ identiques++; continue; }
+      if(remplacementRisque(loc, rec)) risques.push(rec); else aImporter.push(rec);
+    }
+    // Un audit du fichier plus ancien, ou avec moins de photos, que celui de l'appareil ne le remplace pas sans accord
+    let gardes = 0;
+    if(risques.length){
+      if(confirm(risques.length + " audit(s) du fichier sont plus anciens, ou contiennent moins de photos, que ceux de cet appareil.\n\nOK : les remplacer quand même par ceux du fichier\nAnnuler : garder ceux de l'appareil")) risques.forEach((r) => aImporter.push(r));
+      else gardes = risques.length;
+    }
+    let n = 0, echecs = 0;
+    for(const rec of aImporter){
+      if(await dbPut(rec)){ oublierSuppression(rec.id); n++; } else echecs++;
     }
     cache = await dbAllLege();
     renderList();
-    toast(n + " audit(s) importé(s) ✓");
+    const details = [];
+    if(identiques) details.push(identiques + " déjà à jour");
+    if(gardes) details.push(gardes + " gardé(s) tel(s) quel(s)");
+    if(illisibles) details.push(illisibles + " illisible(s)");
+    if(echecs) details.push(echecs + " non enregistré(s)");
+    toast(n + " audit(s) importé(s) ✓" + (details.length ? " · " + details.join(", ") : ""));
   }catch(err){ console.error(err); toast("Fichier de sauvegarde invalide"); }
 });
 
@@ -2150,7 +2617,7 @@ overlay.addEventListener("click", (e) => {
 window.addEventListener("unhandledrejection", function(ev){
   try{
     const el = document.getElementById("app");
-    if(el && el.innerHTML.length < 50){
+    if(el && (el.innerHTML.length < 50 || el.querySelector("[data-demarrage]"))){
       el.innerHTML = '<div class="wrap" style="padding-top:30px;"><div class="card" style="border:2px solid var(--bad);"><h3>⚠️ Erreur</h3><p class="meta" style="word-break:break-all;">'
         + String(ev.reason && ev.reason.message || ev.reason).replace(/</g, "&lt;").slice(0, 250)
         + '</p><p class="meta">📸 Envoyez une capture d écran pour correction — ou fermez tous les onglets du site puis rouvrez.</p></div></div>';
@@ -2160,7 +2627,7 @@ window.addEventListener("unhandledrejection", function(ev){
 window.onerror = function(msg, source, ligne){
   try{
     const el = document.getElementById("app");
-    if(el && el.innerHTML.length < 50){
+    if(el && (el.innerHTML.length < 50 || el.querySelector("[data-demarrage]"))){
       el.innerHTML = '<div class="wrap" style="padding-top:30px;"><div class="card" style="border:2px solid var(--bad);">'
         + '<h3>⚠️ Erreur de démarrage</h3><p class="meta" style="word-break:break-all;">'
         + String(msg).replace(/</g, "&lt;") + ' (ligne ' + ligne + ')</p>'
@@ -2168,16 +2635,23 @@ window.onerror = function(msg, source, ligne){
     }
   }catch(e){}
 };
+// Affiché seulement à la première ouverture après la mise à jour, le temps de préparer la liste rapide
+function afficherPreparation(fait, total){
+  const el = document.getElementById("app");
+  if(el) el.innerHTML = '<div class="wrap" data-demarrage="1"><div class="empty">⏳ Mise à jour du stockage… ' + fait + ' / ' + total
+    + '<br><small>Une seule fois, après la mise à jour de l\'application. Vos audits et vos photos ne sont pas modifiés.</small></div></div>';
+}
 (async function init(){
   try{
-    let ok = true;
+    let ok = false;
     if(window.indexedDB){ ok = await avecDelai(openDB(), 3500).then((r) => r.etat === "ok" && r.valeur === true); }
     if(!ok) stockageHS = true;
-    cache = await dbAllLege();
-    cache.forEach((a) => { a.actions = a.actions || {}; });
+    cache = await chargerListe(afficherPreparation);
     appliquerGrillePerso();
     if(!reglages().cle){ const r = reglages(); r.cle = CLE_CLOUD_DEFAUT; saveReglages(r); }
     renderList();
+    demarre = true;
+    setTimeout(() => { rattrapageEnLigne().catch(console.error); }, 6000);
   }catch(e){
     const el = document.getElementById("app");
     if(el) el.innerHTML = '<div class="wrap" style="padding-top:30px;"><div class="card" style="border:2px solid var(--bad);"><h3>⚠️ Erreur de démarrage</h3><p class="meta" style="word-break:break-all;">'
@@ -2185,7 +2659,12 @@ window.onerror = function(msg, source, ligne){
   }
 })();
 
-// Glissement gauche/droite en mode focus
+// Avant que l'app passe en arrière-plan ou se ferme : on enregistre tout de suite ce qui attend
+document.addEventListener("visibilitychange", () => { if(document.visibilityState === "hidden") sauverMaintenant(); });
+window.addEventListener("pagehide", () => { sauverMaintenant(); });
+// Le réseau revient : on renvoie les audits terminés qui n'étaient pas à jour en ligne
+window.addEventListener("online", () => { if(demarre) rattrapageEnLigne().catch(console.error); });
+
 // Glissement gauche/droite en mode focus
 let tX = null;
 app.addEventListener("touchstart", (e) => { tX = e.touches[0].clientX; }, { passive:true });
