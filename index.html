@@ -538,7 +538,7 @@ function normaliserAudit(brut){
   a.date = enTexte(brut.date, 40);
   a.createdAt = nombre(brut.createdAt) || Date.now();
   a.updatedAt = nombre(brut.updatedAt) || a.createdAt;
-  ["startedAt", "completedAt", "cloudOk", "cloudDernier", "cloudVersion", "cloudDebut"].forEach((k) => { const n = nombre(brut[k]); if(n) a[k] = n; });
+  ["startedAt", "completedAt", "cloudOk", "cloudDernier", "cloudVersion", "cloudDebut", "cloudTaille"].forEach((k) => { const n = nombre(brut[k]); if(n) a[k] = n; });
   if(brut.cloudComplet === true) a.cloudComplet = true;
   if(typeof brut.suiviDe === "string" && brut.suiviDe.length <= 80) a.suiviDe = brut.suiviDe;
   a.answers = champs(brut.answers, (v) => (v === "oui" || v === "non" || v === "na") ? v : undefined);
@@ -643,6 +643,33 @@ function oublierSuppression(id){ try{ const s = supprimes(); if(s[id]){ delete s
 /* ---- Dernière date du Drive vue pour chaque audit jugé à jour : la synchronisation ne re-télécharge pas ce qui n'a pas changé ---- */
 function majVues(){ try{ const s = JSON.parse(localStorage.getItem("audit:majDrive") || "{}"); return estObjet(s) ? s : {}; }catch(e){ return {}; } }
 function noterMajVues(vues){ try{ localStorage.setItem("audit:majDrive", JSON.stringify(vues)); }catch(e){} }
+/* ---- Sauvegardes que la liste du Drive cite encore alors que leur fichier n'existe plus (audits de test supprimés du Drive…) :
+   une fois constaté, on ne les redemande plus et on ne les propose plus à la restauration. ---- */
+function disparusDrive(){ try{ const s = JSON.parse(localStorage.getItem("audit:disparusDrive") || "{}"); return estObjet(s) ? s : {}; }catch(e){ return {}; } }
+function noterDisparusDrive(d){ try{ localStorage.setItem("audit:disparusDrive", JSON.stringify(d)); }catch(e){} }
+function repereDrive(e){ return e.maj == null ? "" : String(e.maj); }   // état du fichier sur le Drive, tel que la liste le décrit
+/* ---- Fichiers du Drive déjà relus avec succès par cet appareil : un fichier signalé « incomplet » à tort n'est pas re-téléchargé à chaque fois ---- */
+function verifiesDrive(){ try{ const s = JSON.parse(localStorage.getItem("audit:verifiesDrive") || "{}"); return estObjet(s) ? s : {}; }catch(e){ return {}; } }
+function noterVerifiesDrive(v){ try{ localStorage.setItem("audit:verifiesDrive", JSON.stringify(v)); }catch(e){} }
+/* ---- Version du relais en service (le relais 4.4 et les suivants l'indiquent dans leurs réponses) ---- */
+function noterVersionRelais(data){
+  try{
+    if(data && typeof data.relais === "string") localStorage.setItem("audit:relaisVersion", data.relais.slice(0, 20));
+    else if(data && (Array.isArray(data.audits) || data.ok === true || data.audit)) localStorage.setItem("audit:relaisVersion", "ancien");
+  }catch(e){}
+}
+function versionRelais(){ try{ return localStorage.getItem("audit:relaisVersion") || ""; }catch(e){ return ""; } }
+function estDisparu(disparus, e){ return disparus[e.id] !== undefined && disparus[e.id] === repereDrive(e); }
+// La liste du Drive peut citer deux fois le même audit : on ne garde que la ligne la plus récente
+function dedoublonner(liste){
+  const parId = {};
+  (Array.isArray(liste) ? liste : []).forEach((x) => {
+    if(!x || typeof x.id !== "string") return;
+    const deja = parId[x.id];
+    if(!deja || (Date.parse(x.maj) || 0) >= (Date.parse(deja.maj) || 0)) parId[x.id] = x;
+  });
+  return Object.keys(parId).map((k) => parId[k]);
+}
 
 /* =====================================================================
    STOCKAGE (IndexedDB, sauvegarde automatique)
@@ -1610,6 +1637,7 @@ function modalEditInfo(){
 function modalReglages(){
   const r = reglages();
   const pb = dernierProblemeRelais();   // dernier souci rencontré avec la sauvegarde en ligne, pour pouvoir le relire
+  const vRelais = versionRelais();      // version du relais constatée lors du dernier échange (vide tant qu'il n'y en a pas eu)
   showModal(`
     <h3>Réglages</h3>
     <div class="field"><label>Logo du rapport (photo/image)</label>
@@ -1634,6 +1662,7 @@ function modalReglages(){
     <button class="btn ghost block" data-action="cloud-restore">☁️ Restaurer depuis le Drive</button>
     <button class="btn ghost block" data-action="reparer" style="margin-top:8px;">🧹 Réparer l'affichage (cache de l'app)</button>
     <p class="meta" style="margin:8px 0 0;">Les audits sont copiés dans votre Google Drive (dossier « Audit Cuisine Sauvegardes ») pendant la saisie, puis une fois terminés — à l'abri même si le téléphone est perdu.</p>
+    ${vRelais ? `<p class="meta" style="margin:8px 0 0;">Relais en service : ${vRelais === "ancien" ? "ancienne version (antérieure à la 4.4)" : "version " + esc(vRelais)}</p>` : ""}
     ${pb ? `<p class="meta" style="margin:8px 0 0; word-break:break-word; color:var(--warn);">Dernier problème en ligne (${esc(dateHeure(pb.quand))}) : ${esc(pb.message)}</p>` : ""}
     <button class="btn primary block" data-action="close-modal" style="margin-top:10px;">Fermer</button>`);
 }
@@ -1827,6 +1856,7 @@ async function appelRelais(quoi, url, options, delaiMax){
 }
 async function demanderAuRelais(quoi, url, options, delaiMax){
   const data = await enFileRelais(() => appelRelais(quoi, url, options, delaiMax));
+  noterVersionRelais(data);
   if(data.erreur){
     const detail = typeof data.erreur === "string" ? data.erreur : JSON.stringify(data.erreur);
     const message = "Le relais a refusé (" + quoi + ") : " + String(detail).slice(0, 300);
@@ -1838,7 +1868,8 @@ async function demanderAuRelais(quoi, url, options, delaiMax){
 async function cloudPost(cle, audit){
   if(!audit || audit._resume) throw new Error("Audit incomplet (sans photos) : envoi refusé");
   const corps = JSON.stringify({ cle, audit });   // l'état de l'audit est figé ici, au moment de l'appel
-  return demanderAuRelais("envoi de l'audit « " + (audit.restaurant || "sans nom") + " »", RELAIS_CLOUD, { method:"POST", body: corps }, 300000);
+  const reponse = await demanderAuRelais("envoi de l'audit « " + (audit.restaurant || "sans nom") + " »", RELAIS_CLOUD, { method:"POST", body: corps }, 300000);
+  return { reponse, octets: corps.length };       // la taille envoyée sert plus tard à repérer un fichier tronqué sur le Drive
 }
 
 /* ---- Suivi des envois en ligne ----
@@ -1854,9 +1885,13 @@ function enLigneAJour(a){
 }
 function modifsNonEnvoyees(a){ return !!(a && (a.cloudVersion || a.cloudOk)) && !enLigneAJour(a); }
 // Note, en mémoire et dans la base, que la version « version » de l'audit est sur le Drive
-function marquerEnLigne(id, version, complet, debut){
+function marquerEnLigne(id, version, complet, debut, octets){
   const quand = Date.now();   // « debut » et « quand » encadrent l'envoi : ils servent à reconnaître notre propre fichier sur le Drive
-  const pose = (a) => { if(a && a.id === id){ a.cloudVersion = version; a.cloudDebut = debut || quand; a.cloudOk = quand; a.cloudDernier = quand; a.cloudComplet = !!complet; } };
+  const pose = (a) => {
+    if(!a || a.id !== id) return;
+    a.cloudVersion = version; a.cloudDebut = debut || quand; a.cloudOk = quand; a.cloudDernier = quand; a.cloudComplet = !!complet;
+    if(octets) a.cloudTaille = octets; else delete a.cloudTaille;
+  };
   pose(current);
   cache.forEach(pose);
   try{ majCarteEnLigne(id); }catch(e){ console.error(e); }
@@ -1871,10 +1906,10 @@ async function envoyerAudit(audit){
   const id = audit.id, version = audit.updatedAt || 0;
   const complet = globalStats(audit).done === TOTAL_Q;
   try{
-    await cloudPost(cleCloud(), audit);
+    const envoi = await cloudPost(cleCloud(), audit);
     e.echecs = 0; e.echecSignale = false;
     try{ localStorage.removeItem("audit:rattrapageEchec"); }catch(err){}   // le relais répond de nouveau : le rattrapage peut reprendre
-    try{ await marquerEnLigne(id, version, complet, e.dernierEssai); }catch(err){ console.error(err); }
+    try{ await marquerEnLigne(id, version, complet, e.dernierEssai, envoi.octets); }catch(err){ console.error(err); }
     return { version, complet };
   }catch(err){
     e.echecs = (e.echecs || 0) + 1; e.echecReseau = !!err.reseau;
@@ -2215,12 +2250,26 @@ async function cloudToutSynchro(surEtape){
   actionCloudManuelle();
   await sauverMaintenant();
   etape("Lecture de la liste du Drive…");
-  const distants = (await cloudLister()).filter((x) => x && typeof x.id === "string");
+  const distants = dedoublonner(await cloudLister());
   const tombes = supprimes(), vuesAvant = majVues(), vues = {};
-  let pousses = 0, importes = 0, illisibles = 0, termine = false;
+  const disparusAvant = disparusDrive(), disparus = {};
+  const verifiesAvant = verifiesDrive(), verifies = {};
+  let pousses = 0, importes = 0, illisibles = 0, repares = 0, nouveauxDisparus = 0, termine = false;
   const echecs = [];
   const locaux = {}, dejaTraites = {};
   cache.forEach((a) => locaux[a.id] = a);
+  // Envoi d'un audit de cet appareil (toujours l'audit complet, jamais la copie sans photos de la liste) ; vrai s'il est parti
+  const envoyer = async (a) => {
+    if(etatEnvoi(a.id).enCours) return false;          // un envoi automatique de cet audit est déjà en route
+    const complet = await chargerComplet(a.id);
+    if(!complet){ illisibles++; return false; }
+    try{ await envoyerAudit(complet); return true; }
+    catch(err){
+      if(err.reseau) throw err;                        // plus de connexion : inutile d'insister
+      echecs.push("Envoi — " + nomAudit(a) + " : " + err.message);
+      return false;
+    }
+  };
   try{
     // 1) Envoi : ce qui n'est pas sur le Drive, ou qui a été modifié ici depuis le dernier envoi
     const aEnvoyer = cache.slice().filter((a) => {
@@ -2232,15 +2281,8 @@ async function cloudToutSynchro(surEtape){
     for(const a of aEnvoyer){
       n++;
       dejaTraites[a.id] = true;
-      if(etatEnvoi(a.id).enCours) continue;            // un envoi automatique de cet audit est déjà en route
       etape("Envoi " + n + " / " + aEnvoyer.length + " — " + nomAudit(a));
-      const complet = await chargerComplet(a.id);      // toujours l'audit complet, jamais la copie sans photos de la liste
-      if(!complet){ illisibles++; continue; }
-      try{ await envoyerAudit(complet); pousses++; }
-      catch(err){
-        if(err.reseau) throw err;                      // plus de connexion : inutile d'insister
-        echecs.push("Envoi — " + nomAudit(a) + " : " + err.message);
-      }
+      if(await envoyer(a)) pousses++;
     }
     // 2) Réception : ce qui manque ici, ou que le Drive a en plus récent, sans jamais écraser des modifications non envoyées
     const aRecevoir = [];
@@ -2250,39 +2292,109 @@ async function cloudToutSynchro(surEtape){
       const majDist = Date.parse(e.maj) || 0;
       if(!loc){
         if(tombes[e.id] && majDist <= tombes[e.id]) continue;   // supprimé sur cet appareil, et pas modifié ailleurs depuis
+        // déjà constaté : la liste du Drive cite ce fichier, mais il n'existe plus
+        if(estDisparu(disparusAvant, e)){ disparus[e.id] = disparusAvant[e.id]; continue; }
       } else {
-        if(majDist <= (loc.updatedAt || 0) || modifsNonEnvoyees(loc)) continue;
-        // le Drive n'a pas bougé depuis la dernière synchronisation : inutile de re-télécharger
-        if(vuesAvant[e.id] !== undefined && vuesAvant[e.id] === e.maj){ vues[e.id] = e.maj; continue; }
-        // la date du Drive tombe pendant notre propre envoi : c'est le fichier que cet appareil vient d'y déposer
-        if(enLigneAJour(loc) && loc.cloudDebut && majDist >= loc.cloudDebut - 15000 && majDist <= (loc.cloudOk || 0) + 15000){ vues[e.id] = e.maj; continue; }
+        if(modifsNonEnvoyees(loc)) continue;
+        // ce fichier précis du Drive a déjà été relu avec succès par cet appareil
+        const dejaRelu = verifiesAvant[e.id] !== undefined && verifiesAvant[e.id] === repereDrive(e);
+        if(dejaRelu) verifies[e.id] = verifiesAvant[e.id];
+        // Fichier peut-être incomplet : signalé par le relais (« abime », relais 4.4), vide, ou bien plus petit
+        // que ce que cet appareil y a envoyé. On le relit pour vérifier, même si rien d'autre n'a changé.
+        const douteux = !dejaRelu && (e.abime === true || e.taille === 0 || (!!loc.cloudTaille && typeof e.taille === "number" && e.taille < 0.6 * loc.cloudTaille));
+        if(!douteux){
+          // le Drive n'a pas bougé depuis la dernière synchronisation : inutile de re-télécharger
+          if(vuesAvant[e.id] !== undefined && vuesAvant[e.id] === e.maj){ vues[e.id] = e.maj; continue; }
+          if(majDist <= (loc.updatedAt || 0)) continue;
+          // la date du Drive tombe pendant notre propre envoi : c'est le fichier que cet appareil vient d'y déposer
+          if(enLigneAJour(loc) && loc.cloudDebut && majDist >= loc.cloudDebut - 15000 && majDist <= (loc.cloudOk || 0) + 15000){ vues[e.id] = e.maj; continue; }
+        }
       }
       aRecevoir.push(e);
     }
     n = 0;
     for(const e of aRecevoir){
       n++;
+      const loc = locaux[e.id];
       etape("Réception " + n + " / " + aRecevoir.length + " — " + nomAudit(e));
-      let audit = null;
+      let audit = null, refus = null;
       try{ audit = normaliserAudit(await cloudCharger(e.id)); }
       catch(err){
         if(err.reseau) throw err;
-        echecs.push("Réception — " + nomAudit(e) + " : " + err.message);
+        refus = err;
+      }
+      if(!audit){
+        // Le Drive ne restitue pas cet audit : fichier absent (la liste le cite encore) ou illisible (fichier abîmé).
+        const absent = !!refus && /introuvable/i.test(refus.message);
+        const detail = refus ? " (" + refus.message + ")" : "";
+        if(loc){
+          // l'audit est sur cet appareil : on remplace la sauvegarde du Drive par la nôtre, puis on vérifie qu'elle est relisible
+          if(reparationsSansEffet[loc.id] === (loc.updatedAt || 0)){
+            echecs.push("Drive — " + nomAudit(loc) + " : la sauvegarde reste illisible malgré un renvoi" + detail + ". Vous pouvez réessayer avec ☁️ sur la carte de cet audit.");
+            continue;
+          }
+          etape("Réparation de la sauvegarde — " + nomAudit(loc));
+          try{ await reparerSurDrive(loc.id); repares++; }
+          catch(err){
+            if(err.reseau) throw err;
+            echecs.push("Drive — " + nomAudit(loc) + " : la sauvegarde était " + (absent ? "absente" : "illisible") + " et n'a pas pu être remplacée (" + err.message + ")");
+          }
+        } else if(absent){
+          disparus[e.id] = repereDrive(e); nouveauxDisparus++;      // on s'en souvient : elle ne sera plus redemandée
+        } else {
+          echecs.push("Réception — " + nomAudit(e) + " : la sauvegarde du Drive est illisible" + detail + ". Pour la réparer : sur l'appareil qui contient cet audit, touchez ☁️ sur sa carte.");
+        }
         continue;
       }
-      if(!audit){ illisibles++; continue; }
+      if(loc){
+        const vLoc = loc.updatedAt || 0, vDrive = audit.updatedAt || 0;
+        const photosLoc = loc._resume ? (loc.nbPhotos || 0) : nbPhotos(loc);
+        if(vDrive < vLoc){
+          // le Drive a une version plus ancienne que celle de cet appareil : on garde la nôtre et on la renvoie
+          if(await envoyer(loc)) pousses++;
+          continue;
+        }
+        if(vDrive === vLoc && nbPhotos(audit) <= photosLoc){ vues[e.id] = e.maj; verifies[e.id] = repereDrive(e); continue; }   // même version, relue avec succès : rien à changer ici
+      }
       audit.cloudVersion = audit.updatedAt; audit.cloudOk = Date.now(); audit.cloudDernier = audit.cloudOk;
       audit.cloudComplet = globalStats(audit).done === TOTAL_Q;
-      delete audit.cloudDebut;
-      if(await dbPut(audit)){ oublierSuppression(e.id); vues[e.id] = e.maj; importes++; }
+      delete audit.cloudDebut; delete audit.cloudTaille;
+      if(await dbPut(audit)){ oublierSuppression(e.id); vues[e.id] = e.maj; verifies[e.id] = repereDrive(e); importes++; }
     }
     termine = true;
   }finally{
     // interrompue en route : on garde ce qui a déjà été vérifié, sans rien oublier de l'ancienne mémoire
     noterMajVues(termine ? vues : Object.assign({}, vuesAvant, vues));
+    noterVerifiesDrive(termine ? verifies : Object.assign({}, verifiesAvant, verifies));
+    noterDisparusDrive(termine ? disparus : Object.assign({}, disparusAvant, disparus));
     cache = await dbAllLege();
   }
-  return { pousses, importes, illisibles, echecs };
+  return { pousses, importes, illisibles, repares, disparus: nouveauxDisparus, echecs };
+}
+/* Remplace sur le Drive une sauvegarde absente ou illisible par l'audit complet de cet appareil,
+   puis relit ce que le Drive restitue pour s'assurer que la sauvegarde est de nouveau utilisable. */
+const reparationsSansEffet = {};   // id → version déjà renvoyée sans que le Drive la restitue : on n'insiste pas pendant cette session
+async function reparerSurDrive(id){
+  const complet = await chargerComplet(id);
+  if(!complet) throw new Error("lecture de l'audit impossible sur cet appareil");
+  await envoyerAudit(complet);
+  // Relecture de contrôle. Le Drive met parfois un instant à présenter un fichier tout juste écrit : jusqu'à trois essais.
+  let relu = false, motif = null;
+  for(let essai = 0; essai < 3 && !relu; essai++){
+    if(essai) await new Promise((r) => setTimeout(r, 2000));
+    try{
+      const a = normaliserAudit(await cloudCharger(id));
+      if(a && (a.updatedAt || 0) === (complet.updatedAt || 0)) relu = true;
+      else motif = new Error("le Drive ne restitue pas la version qui vient d'être envoyée");
+    }catch(err){
+      if(err.reseau) throw err;
+      motif = new Error("le Drive ne restitue toujours pas cet audit après renvoi — " + err.message);
+    }
+  }
+  if(!relu){
+    reparationsSansEffet[id] = complet.updatedAt || 0;
+    throw motif;
+  }
 }
 // Fenêtre d'explication pour un problème en ligne : elle reste affichée, le temps de lire ou de faire une capture
 function afficherProbleme(titre, message, lignes){
@@ -2298,7 +2410,9 @@ async function cloudRestaurer(){
   try{
     actionCloudManuelle();
     toast("Recherche des sauvegardes…");
-    const liste = await cloudLister();
+    const absents = disparusDrive();
+    // sans les doublons, ni les sauvegardes dont on sait que le fichier n'existe plus sur le Drive
+    const liste = dedoublonner(await cloudLister()).filter((a) => !estDisparu(absents, a));
     if(!liste.length){
       showModal(`<h3>☁️ Restaurer</h3><div class="empty">Aucune sauvegarde dans votre Drive pour l'instant.</div>
         <button class="btn primary block" data-action="close-modal">Fermer</button>`);
@@ -2308,7 +2422,7 @@ async function cloudRestaurer(){
       ${liste.map((a) => `
         <div class="pl-item"><span style="flex:1; min-width:0;"><b style="font-size:13.5px;">${esc(a.restaurant || "?")}</b>
         <span class="meta" style="display:block;">${esc(a.date || "?")} · ${Math.round((a.taille || 0) / 1024)} Ko</span></span>
-        <button class="btn ghost" data-action="cloud-import" data-id="${esc(a.id)}" style="min-height:38px; padding:8px 12px;">Importer</button></div>`).join("")}
+        <button class="btn ghost" data-action="cloud-import" data-id="${esc(a.id)}" data-maj="${esc(repereDrive(a))}" style="min-height:38px; padding:8px 12px;">Importer</button></div>`).join("")}
       <button class="btn primary block" data-action="close-modal" style="margin-top:10px;">Fermer</button>`);
   }catch(e){ afficherProbleme("Liste du Drive indisponible", e.message, []); }
 }
@@ -2395,9 +2509,13 @@ document.body.addEventListener("click", async (e) => {
     cloudToutSynchro(etape)
       .then((r) => {
         if(state.view === "list") renderList();
-        const resume = r.pousses + " envoyé(s), " + r.importes + " importé(s)" + (r.illisibles ? ", " + r.illisibles + " illisible(s) à réessayer" : "");
-        if(r.echecs.length) afficherProbleme("Synchronisation incomplète", resume + ". " + r.echecs.length + " audit(s) n'ont pas pu être traités :", r.echecs);
-        else { if(document.getElementById("syncEtat")) closeModal(); toast("🔄 Synchronisé : " + resume + " ✓", 4000); }
+        const resume = r.pousses + " envoyé(s), " + r.importes + " importé(s)"
+          + (r.repares ? ", " + r.repares + " sauvegarde(s) du Drive réparée(s)" : "")
+          + (r.illisibles ? ", " + r.illisibles + " illisible(s) à réessayer" : "");
+        // sauvegardes que le Drive cite sans les avoir (audits supprimés du Drive) : signalées une fois, puis ignorées
+        const note = r.disparus ? r.disparus + " sauvegarde(s) citée(s) par le Drive n'existent plus : elles sont désormais ignorées." : "";
+        if(r.echecs.length) afficherProbleme("Synchronisation incomplète", resume + ". " + (note ? note + " " : "") + r.echecs.length + " audit(s) n'ont pas pu être traités :", r.echecs);
+        else { if(document.getElementById("syncEtat")) closeModal(); toast("🔄 Synchronisé : " + resume + " ✓" + (note ? " — " + note : ""), note ? 8000 : 4000); }
       })
       .catch((e) => { if(state.view === "list") renderList(); afficherProbleme("Synchronisation impossible", e.message, []); });
   }
@@ -2494,7 +2612,7 @@ document.body.addEventListener("click", async (e) => {
         if(remplacementRisque(local, audit) && !confirm("La version de cet appareil est plus récente, ou contient plus de photos, que celle du Drive.\n\nLa remplacer quand même par celle du Drive ?")) return;
         audit.cloudVersion = audit.updatedAt; audit.cloudOk = Date.now(); audit.cloudDernier = audit.cloudOk;
         audit.cloudComplet = globalStats(audit).done === TOTAL_Q;
-        delete audit.cloudDebut;
+        delete audit.cloudDebut; delete audit.cloudTaille;
         if(!(await dbPut(audit))) throw new Error("enregistrement impossible sur l'appareil");
         oublierSuppression(audit.id);
         cache = await dbAllLege();
@@ -2502,7 +2620,18 @@ document.body.addEventListener("click", async (e) => {
         renderList();
         toast("Audit importé depuis le Drive ✓");
       })
-      .catch((e) => toast("Erreur : " + e.message, 8000));
+      .catch((e) => {
+        if(!e.reseau && /introuvable/i.test(e.message)){
+          // le Drive cite cette sauvegarde mais ne l'a plus : on la retire de la liste et on ne la proposera plus
+          const absents = disparusDrive();
+          absents[el.dataset.id] = el.dataset.maj || "";
+          noterDisparusDrive(absents);
+          const ligne = el.closest(".pl-item");
+          if(ligne) ligne.remove();
+          toast("Cette sauvegarde n'existe plus sur le Drive : elle est retirée de la liste", 6000);
+        }
+        else toast("Erreur : " + e.message, 8000);
+      });
   }
   else if(act === "open-suivi"){ state.view = "suivi"; render(); }
   else if(act === "add-cam"){
