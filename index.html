@@ -220,6 +220,9 @@
   .mesure input{width:110px; border:1.5px solid #0369a1; background:#f0f9ff; color:#075985; border-radius:10px;
     padding:8px 10px; font-size:15px; font-weight:700; font-family:inherit;}
   .mesure span{font-size:12px; font-weight:800; color:#0369a1;}
+  .sig-alerte{background:#fff7ed; color:#9a3412; border:1.5px solid #f97316; border-radius:10px;
+    padding:9px 12px; font-size:13px; font-weight:700; margin:10px 0; text-align:left;}
+  .sigdate{display:block; min-height:15px; margin:0 0 4px; font-size:11px; color:var(--muted);}
   .recidive{background:#7c2d12; color:#fff; border-radius:6px; padding:2px 8px; font-size:11px;
     font-weight:800; margin-left:6px; white-space:nowrap;}
   .up{color:var(--ok);}
@@ -494,7 +497,7 @@ function assainir(a){
   a.auditor = enTexte(a.auditor, 200);
   a.date = enTexte(a.date, 40);
   ["answers", "notes", "photos", "actions"].forEach((k) => { if(!estObjet(a[k])) a[k] = {}; });
-  ["mesures", "rappels", "signatures"].forEach((k) => { if(a[k] != null && !estObjet(a[k])) delete a[k]; });
+  ["mesures", "rappels", "signatures", "sigInfos"].forEach((k) => { if(a[k] != null && !estObjet(a[k])) delete a[k]; });
   for(const k in a.answers){ const v = a.answers[k]; if(v !== "oui" && v !== "non" && v !== "na") delete a.answers[k]; }
   for(const k in a.notes){ if(typeof a.notes[k] !== "string") a.notes[k] = enTexte(a.notes[k], 5000); }
   for(const k in a.photos){
@@ -551,6 +554,14 @@ function normaliserAudit(brut){
     ["auditeur", "responsable"].forEach((r) => { if(estImage(brut.signatures[r])) s[r] = brut.signatures[r]; });
     if(Object.keys(s).length) a.signatures = s;
   }
+  if(estObjet(brut.sigInfos) && a.signatures){   // date et empreinte de chaque signature conservée
+    const s = {};
+    ["auditeur", "responsable"].forEach((r) => {
+      const v = brut.sigInfos[r];
+      if(a.signatures[r] && estObjet(v) && typeof v.empreinte === "string" && v.empreinte.length <= 80) s[r] = { le: nombre(v.le) || 0, empreinte: v.empreinte };
+    });
+    if(Object.keys(s).length) a.sigInfos = s;
+  }
   return a;
 }
 // Vrai si remplacer l'audit de l'appareil par « nouveau » ferait perdre quelque chose
@@ -567,6 +578,63 @@ function auditTermine(a){
   return true;
 }
 function parDate(a, b){ return (a.date || "").localeCompare(b.date || "") || (a.createdAt || 0) - (b.createdAt || 0); }
+
+/* ---- Signatures : on retient quand chacune a été faite, et sur quel contenu, pour signaler dans le rapport
+   qu'un audit a été modifié après avoir été signé. Rien n'est bloqué : c'est une information. ---- */
+const VERSION_EMPREINTE = "e1";
+// Empreinte du contenu de l'audit (infos, réponses, constats, relevés, échéances, photos). Les champs vides ne comptent pas.
+function empreinteAudit(a){
+  const remplis = (o, lire) => Object.keys(o || {}).sort().map((k) => [k, lire ? lire(o[k]) : o[k]]).filter((x) => x[1] !== "" && x[1] != null);
+  const contenu = [
+    a.restaurant || "", a.auditor || "", a.date || "",
+    remplis(a.answers), remplis(a.notes), remplis(a.mesures),
+    remplis(a.actions, (v) => (v && (v.echeance || v.quand)) ? (v.echeance || "") + "|" + (v.quand || "") : ""),
+    remplis(a.photos, (l) => (Array.isArray(l) && l.length) ? l.map((p) => String(p).length + ":" + String(p).slice(-48)).join(",") : "")
+  ];
+  const texte = JSON.stringify(contenu);
+  let h1 = 5381, h2 = 52711;
+  for(let i = 0; i < texte.length; i++){ const c = texte.charCodeAt(i); h1 = ((h1 * 33) ^ c) >>> 0; h2 = (Math.imul(h2, 31) + c) >>> 0; }
+  return VERSION_EMPREINTE + ":" + texte.length + "-" + h1.toString(36) + "-" + h2.toString(36);
+}
+function dateHeure(ts){
+  const d = new Date(ts);
+  return isNaN(d) ? "" : d.toLocaleDateString("fr-FR") + " à " + d.toLocaleTimeString("fr-FR", { hour:"2-digit", minute:"2-digit" });
+}
+// Pour chaque signature : "" (absente), "inconnu" (faite avant cette fonction), "ajour", ou "modifie" (l'audit a changé depuis)
+function etatsSignatures(audit){
+  const actuelle = empreinteAudit(audit);
+  const out = {};
+  ["auditeur", "responsable"].forEach((role) => {
+    const info = (audit.sigInfos || {})[role];
+    if(!(audit.signatures || {})[role]) out[role] = { etat:"" };
+    else if(!estObjet(info) || typeof info.empreinte !== "string" || info.empreinte.indexOf(VERSION_EMPREINTE + ":") !== 0) out[role] = { etat:"inconnu" };
+    else out[role] = { etat: info.empreinte === actuelle ? "ajour" : "modifie", le: info.le };
+  });
+  return out;
+}
+function alerteSignatures(etats){
+  const libelles = { auditeur:"de l'auditeur", responsable:"du responsable" };
+  const parts = [];
+  ["auditeur", "responsable"].forEach((role) => {
+    const s = etats[role];
+    if(s.etat === "modifie") parts.push("la signature " + libelles[role] + (s.le ? " du " + dateHeure(s.le) : ""));
+  });
+  return parts.length ? "Audit modifié après " + parts.join(" et ") + " — à faire signer de nouveau." : "";
+}
+function texteSignature(s){ return (s && (s.etat === "ajour" || s.etat === "modifie") && s.le) ? "Signé le " + dateHeure(s.le) : ""; }
+// Met à jour, dans le rapport affiché, la date de chaque signature et l'alerte « modifié après signature »
+function majEtatSignatures(audit){
+  const etats = etatsSignatures(audit);
+  const alerte = alerteSignatures(etats);
+  ["sigAlerteHaut", "sigAlerte"].forEach((id) => {
+    const el = document.getElementById(id);
+    if(el){ el.textContent = alerte ? "⚠️ " + alerte : ""; el.classList.toggle("hide", !alerte); }
+  });
+  ["auditeur", "responsable"].forEach((role) => {
+    const el = document.getElementById("sigDate-" + role);
+    if(el) el.textContent = texteSignature(etats[role]);
+  });
+}
 
 /* ---- Audits supprimés sur cet appareil : la synchronisation ne doit pas les faire revenir ---- */
 function supprimes(){ try{ const s = JSON.parse(localStorage.getItem("audit:supprimes") || "{}"); return estObjet(s) ? s : {}; }catch(e){ return {}; } }
@@ -815,6 +883,8 @@ function sauverMaintenant(){
 async function enregistrer(audit){
   try{
     const gs = globalStats(audit);
+    // l'heure de début est posée à la première réponse, quelle que soit la façon de répondre (bouton, « Tout Oui », relevé)
+    if(!audit.startedAt && gs.done > 0) audit.startedAt = Date.now();
     // l'heure de fin est posée AVANT l'écriture, pour être enregistrée avec la dernière réponse
     if(gs.done === TOTAL_Q){ if(!audit.completedAt) audit.completedAt = Date.now(); }
     else delete audit.completedAt;
@@ -887,12 +957,12 @@ function fmtDate(iso){
   const d = new Date(iso + "T12:00:00");
   return isNaN(d) ? iso : d.toLocaleDateString("fr-FR", { day:"numeric", month:"long", year:"numeric" });
 }
-function toast(msg){
+function toast(msg, duree){   // duree (ms) : plus longue pour un message d'erreur qu'il faut avoir le temps de lire
   const t = document.getElementById("toast");
   t.textContent = msg;
   t.classList.add("show");
   clearTimeout(t._tm);
-  t._tm = setTimeout(() => t.classList.remove("show"), 2200);
+  t._tm = setTimeout(() => t.classList.remove("show"), duree || 2200);
 }
 function newId(){ return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
 function todayISO(){ const d = new Date(); return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0"); }
@@ -1402,6 +1472,7 @@ function renderReport(){
   </div></div>
   <div class="wrap">
     ${critiques.length ? `<div class="crit-banner">🚨 ${critiques.length} non-conformité${critiques.length > 1 ? "s" : ""} critique${critiques.length > 1 ? "s" : ""} HACCP — action immédiate requise, quel que soit le score global</div>` : ""}
+    <div class="sig-alerte hide" id="sigAlerteHaut"></div>
     <div class="rep-hero">
       ${logo ? `<img class="rep-logo" src="${esc(logo)}" alt="logo">` : ""}
       <div class="gauge">
@@ -1419,7 +1490,7 @@ function renderReport(){
     </div>
     <p class="rep-meta">Restaurant : <b>${esc(audit.restaurant || "—")}</b> · Auditeur : <b>${esc(audit.auditor || "—")}</b><br>
     ${esc(fmtDate(audit.date))} · N/A exclu du calcul, comme les « sans réponse »</p>
-    ${(audit.startedAt && audit.completedAt) ? `<p class="rep-meta">⏱️ Audit réalisé de ${new Date(audit.startedAt).toLocaleTimeString("fr-FR", { hour:"2-digit", minute:"2-digit" })} à ${new Date(audit.completedAt).toLocaleTimeString("fr-FR", { hour:"2-digit", minute:"2-digit" })} (${Math.floor((audit.completedAt - audit.startedAt) / 3600000)} h ${String(Math.round((audit.completedAt - audit.startedAt) % 3600000 / 60000)).padStart(2, "0")})</p>` : ""}
+    ${(audit.startedAt && audit.completedAt > audit.startedAt) ? `<p class="rep-meta">⏱️ Audit réalisé de ${new Date(audit.startedAt).toLocaleTimeString("fr-FR", { hour:"2-digit", minute:"2-digit" })} à ${new Date(audit.completedAt).toLocaleTimeString("fr-FR", { hour:"2-digit", minute:"2-digit" })} (${Math.floor(Math.round((audit.completedAt - audit.startedAt) / 60000) / 60)} h ${String(Math.round((audit.completedAt - audit.startedAt) / 60000) % 60).padStart(2, "0")})</p>` : ""}
     ${secRows}
     <div class="rep-actions noprint">
       <button class="btn primary" data-action="print-report">🖨️ Imprimer / PDF</button>
@@ -1432,18 +1503,22 @@ function renderReport(){
               : `<div class="rep-ok">🎉 Aucun point « Non » : tout est conforme !</div>`}
     <div class="card">
       <h3>✍️ Signatures</h3>
+      <div class="sig-alerte hide" id="sigAlerte"></div>
       <div class="sigrow">
         <div class="sigbox"><canvas class="sigpad" data-role="auditeur" width="320" height="120"></canvas><small>Auditeur</small>
+          <span class="sigdate" id="sigDate-auditeur"></span>
           <button class="btn ghost" data-action="sig-clear" data-role="auditeur" style="min-height:36px; padding:6px 12px;">Effacer</button></div>
         <div class="sigbox"><canvas class="sigpad" data-role="responsable" width="320" height="120"></canvas><small>Responsable</small>
+          <span class="sigdate" id="sigDate-responsable"></span>
           <button class="btn ghost" data-action="sig-clear" data-role="responsable" style="min-height:36px; padding:6px 12px;">Effacer</button></div>
       </div>
-      <p class="meta" style="margin:8px 2px 0;">Signez au doigt : les signatures apparaissent dans le rapport imprimé et partagé.</p>
+      <p class="meta" style="margin:8px 2px 0;">Signez au doigt : les signatures apparaissent dans le rapport imprimé et partagé. Si l'audit est modifié ensuite, le rapport le signale.</p>
     </div>
     <p class="legend">Barème : 95–100 Excellent · 90–94 Très bien · 80–89 Conforme · 70–79 À améliorer · 60–69 Insuffisant · &lt;60 Audit à refaire d'urgence.<br>
     Score global = moyenne des ${SECTIONS.length} scores de section (règle identique au fichier Excel).</p>
   </div>`;
   initSignatures(audit);
+  majEtatSignatures(audit);
   window.scrollTo(0, 0);
 }
 
@@ -1482,7 +1557,11 @@ function initSignatures(audit){
       dessine = false;
       audit.signatures = audit.signatures || {};
       audit.signatures[role] = cv.toDataURL("image/png");
+      // on retient la date de la signature et l'état de l'audit à ce moment-là
+      audit.sigInfos = audit.sigInfos || {};
+      audit.sigInfos[role] = { le: Date.now(), empreinte: empreinteAudit(audit) };
       scheduleSave();
+      majEtatSignatures(audit);
     };
     cv.onpointerup = fin;
     cv.onpointercancel = fin;   // geste interrompu par le système : on garde quand même le tracé
@@ -1493,6 +1572,8 @@ function initSignatures(audit){
 const overlay = document.getElementById("overlay");
 function closeModal(){ overlay.innerHTML = ""; overlay.style.display = "none"; }
 function showModal(html){
+  const bulle = document.getElementById("toast");
+  if(bulle) bulle.classList.remove("show");   // un message encore affiché ne doit pas recouvrir la fenêtre qui s'ouvre
   overlay.innerHTML = `<div class="modal-bg" data-action="modal-bg">
     <div class="sheet">${html}</div></div>`;
   overlay.style.display = "block";
@@ -1528,6 +1609,7 @@ function modalEditInfo(){
 }
 function modalReglages(){
   const r = reglages();
+  const pb = dernierProblemeRelais();   // dernier souci rencontré avec la sauvegarde en ligne, pour pouvoir le relire
   showModal(`
     <h3>Réglages</h3>
     <div class="field"><label>Logo du rapport (photo/image)</label>
@@ -1552,6 +1634,7 @@ function modalReglages(){
     <button class="btn ghost block" data-action="cloud-restore">☁️ Restaurer depuis le Drive</button>
     <button class="btn ghost block" data-action="reparer" style="margin-top:8px;">🧹 Réparer l'affichage (cache de l'app)</button>
     <p class="meta" style="margin:8px 0 0;">Les audits sont copiés dans votre Google Drive (dossier « Audit Cuisine Sauvegardes ») pendant la saisie, puis une fois terminés — à l'abri même si le téléphone est perdu.</p>
+    ${pb ? `<p class="meta" style="margin:8px 0 0; word-break:break-word; color:var(--warn);">Dernier problème en ligne (${esc(dateHeure(pb.quand))}) : ${esc(pb.message)}</p>` : ""}
     <button class="btn primary block" data-action="close-modal" style="margin-top:10px;">Fermer</button>`);
 }
 function openViewer(qid, i){
@@ -1617,6 +1700,8 @@ function buildReportHtml(audit){
   const ic = interp(gs.score);
   const logo = reglages().logo;
   const termine = auditTermine(audit);
+  const etatsSig = etatsSignatures(audit);
+  const alerteSig = alerteSignatures(etatsSig);   // « modifié après signature », le cas échéant
   let body = "";
   SECTIONS.forEach((s, i) => {
     const st = gs.parts[i];
@@ -1661,9 +1746,10 @@ function buildReportHtml(audit){
   ${logoHtml}
   <h1>🧑‍🍳 Audit Cuisine — ${esc(audit.restaurant || "")}</h1>
   <div class="sub">${esc(audit.date ? fmtDate(audit.date) : "")} · Auditeur : ${esc(audit.auditor || "—")} · ${gs.done}/${TOTAL_Q} questions traitées
-  ${(audit.startedAt && audit.completedAt) ? ` · ⏱️ de ${new Date(audit.startedAt).toLocaleTimeString("fr-FR", { hour:"2-digit", minute:"2-digit" })} à ${new Date(audit.completedAt).toLocaleTimeString("fr-FR", { hour:"2-digit", minute:"2-digit" })}` : ""}</div>
+  ${(audit.startedAt && audit.completedAt > audit.startedAt) ? ` · ⏱️ de ${new Date(audit.startedAt).toLocaleTimeString("fr-FR", { hour:"2-digit", minute:"2-digit" })} à ${new Date(audit.completedAt).toLocaleTimeString("fr-FR", { hour:"2-digit", minute:"2-digit" })}` : ""}</div>
   <div><span class="score">${gs.score === null ? "—" : Math.round(gs.score) + " %"}</span> &nbsp;<span class="ilabel">${termine ? ic.label : "Score provisoire"}</span></div>
   ${gs.veto ? `<p style="color:#b91c1c;font-weight:700;font-size:13px;">⚖️ ${esc(gs.veto)}${gs.scoreBrut !== null ? " — score brut : " + Math.round(gs.scoreBrut) + " %" : ""}</p>` : ""}
+  ${alerteSig ? `<p style="background:#fff7ed;color:#9a3412;border:1.5px solid #f97316;border-radius:8px;padding:8px 12px;font-weight:700;font-size:13px;">⚠️ ${esc(alerteSig)}</p>` : ""}
   <table><tr><th>Section</th><th>Score</th><th>Détail</th></tr>${body}</table>
   ${criticalsNC(audit).length ? `<div style="background:#dc2626;color:#fff;border-radius:10px;padding:10px 14px;font-weight:800;margin:14px 0;">🚨 ${criticalsNC(audit).length} non-conformité(s) critique(s) HACCP — action immédiate requise</div>` : ""}
   ${details ? `<h2 style="font-size:18px;">❌ Points à améliorer</h2>${details}` : `<p>✅ Aucun point « Non » relevé.</p>`}
@@ -1671,8 +1757,8 @@ function buildReportHtml(audit){
   <table><tr><th>Point</th><th>Échéance</th></tr>${planLignes}</table>` : ""}
   ${(audit.signatures && (audit.signatures.auditeur || audit.signatures.responsable)) ? `
   <div style="display:flex; gap:24px; margin-top:18px; flex-wrap:wrap;">
-    ${audit.signatures.auditeur ? `<div><div style="font-size:12px;color:#64748b;">Signature auditeur</div><img src="${esc(audit.signatures.auditeur)}" style="max-width:230px; border-bottom:1px solid #cbd5e1;"></div>` : ""}
-    ${audit.signatures.responsable ? `<div><div style="font-size:12px;color:#64748b;">Signature responsable</div><img src="${esc(audit.signatures.responsable)}" style="max-width:230px; border-bottom:1px solid #cbd5e1;"></div>` : ""}
+    ${audit.signatures.auditeur ? `<div><div style="font-size:12px;color:#64748b;">Signature auditeur</div><img src="${esc(audit.signatures.auditeur)}" style="max-width:230px; border-bottom:1px solid #cbd5e1;"><div style="font-size:11px;color:#64748b;">${esc(texteSignature(etatsSig.auditeur))}</div></div>` : ""}
+    ${audit.signatures.responsable ? `<div><div style="font-size:12px;color:#64748b;">Signature responsable</div><img src="${esc(audit.signatures.responsable)}" style="max-width:230px; border-bottom:1px solid #cbd5e1;"><div style="font-size:11px;color:#64748b;">${esc(texteSignature(etatsSig.responsable))}</div></div>` : ""}
   </div>` : ""}
   <p class="legend">Score global = moyenne des ${SECTIONS.length} scores de section. Barème : 95–100 Excellent · 90–94 Très bien · 80–89 Conforme ·
   70–79 À améliorer · 60–69 Insuffisant · &lt;60 Audit à refaire d'urgence.<br>Rapport généré le ${new Date().toLocaleString("fr-FR")}.</p>
@@ -1692,19 +1778,67 @@ async function shareReport(){
   download(new Blob([html], { type:"text/html" }), name);
   toast("Rapport téléchargé — envoyez-le par mail ou WhatsApp");
 }
+/* ---- Échanges avec le relais ----
+   - une seule demande à la fois : un envoi automatique ne se mélange jamais avec une synchronisation ;
+   - la réponse est vérifiée : si le relais répond autre chose que des données (page d'erreur de Google,
+     réponse vide…), on réessaie une fois, puis on dit clairement ce qu'il a répondu ;
+   - le dernier problème est gardé pour pouvoir être relu dans les réglages. */
+let fileRelais = Promise.resolve();
+function enFileRelais(tache){
+  const p = fileRelais.then(tache);
+  fileRelais = p.then(() => {}, () => {});
+  return p;
+}
+// Début lisible de ce que le relais a répondu (sans les balises d'une page web)
+function apercuReponse(txt){
+  const t = String(txt == null ? "" : txt).replace(/<(style|script)[\s\S]*?<\/\1>/gi, " ").replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ").replace(/&amp;/gi, "&").replace(/\s+/g, " ").trim();
+  return t ? "« " + t.slice(0, 180) + (t.length > 180 ? "…" : "") + " »" : "réponse vide";
+}
+function noterProblemeRelais(quoi, message){
+  try{ localStorage.setItem("audit:dernierProbleme", JSON.stringify({ quand:Date.now(), quoi, message })); }catch(e){}
+}
+function dernierProblemeRelais(){
+  try{
+    const p = JSON.parse(localStorage.getItem("audit:dernierProbleme") || "null");
+    return (estObjet(p) && typeof p.message === "string" && Date.now() - (p.quand || 0) < 7 * 86400000) ? p : null;
+  }catch(e){ return null; }
+}
+async function appelRelais(quoi, url, options, delaiMax){
+  let recu = "";
+  for(let essai = 0; essai < 2; essai++){
+    if(essai) await new Promise((r) => setTimeout(r, 1500));
+    const ctl = (typeof AbortController === "function") ? new AbortController() : null;
+    const garde = ctl ? setTimeout(() => ctl.abort(), delaiMax) : null;
+    try{
+      const resp = await fetch(url, ctl ? Object.assign({ signal:ctl.signal }, options) : options);
+      recu = await resp.text();
+    }catch(e){
+      const err = new Error("Connexion au relais impossible (" + quoi + ")");
+      err.reseau = true;
+      noterProblemeRelais(quoi, err.message);
+      throw err;
+    }finally{ clearTimeout(garde); }
+    try{ const data = JSON.parse(recu); if(estObjet(data)) return data; }catch(e){}
+  }
+  const err = new Error("Le relais a mal répondu (" + quoi + ") : " + apercuReponse(recu));
+  noterProblemeRelais(quoi, err.message);
+  throw err;
+}
+async function demanderAuRelais(quoi, url, options, delaiMax){
+  const data = await enFileRelais(() => appelRelais(quoi, url, options, delaiMax));
+  if(data.erreur){
+    const detail = typeof data.erreur === "string" ? data.erreur : JSON.stringify(data.erreur);
+    const message = "Le relais a refusé (" + quoi + ") : " + String(detail).slice(0, 300);
+    noterProblemeRelais(quoi, message);
+    throw new Error(message);
+  }
+  return data;
+}
 async function cloudPost(cle, audit){
   if(!audit || audit._resume) throw new Error("Audit incomplet (sans photos) : envoi refusé");
   const corps = JSON.stringify({ cle, audit });   // l'état de l'audit est figé ici, au moment de l'appel
-  let txt;
-  try{
-    const resp = await fetch(RELAIS_CLOUD, { method:"POST", body: corps });
-    txt = await resp.text();
-  }catch(e){ const err = new Error("Connexion au relais impossible"); err.reseau = true; throw err; }
-  let data;
-  try{ data = JSON.parse(txt); }
-  catch(e){ throw new Error("Réponse du relais invalide — mettez à jour le relais en version 3"); }
-  if(data.erreur) throw new Error(data.erreur);
-  return data;
+  return demanderAuRelais("envoi de l'audit « " + (audit.restaurant || "sans nom") + " »", RELAIS_CLOUD, { method:"POST", body: corps }, 300000);
 }
 
 /* ---- Suivi des envois en ligne ----
@@ -1804,15 +1938,20 @@ function cloudAuto(audit){
 /* À l'ouverture de l'app (ou au retour du réseau) : renvoie en arrière-plan les audits terminés
    dont la dernière version n'est pas sur le Drive (envoi interrompu, pas de réseau en cuisine…). */
 let rattrapageEnCours = false;
+let derniereActionCloud = 0;   // dernière action en ligne demandée par l'utilisateur : elle passe avant le rattrapage automatique
+function actionCloudManuelle(){ derniereActionCloud = Date.now(); }
 async function rattrapageEnLigne(){
   if(rattrapageEnCours || reglages().autoCloud === false || stockageHS || !db || navigator.onLine === false) return;
+  if(Date.now() - derniereActionCloud < 120000) return;   // l'utilisateur vient de synchroniser, restaurer ou envoyer : on le laisse faire
   let blocage = 0;
   try{ blocage = Number(localStorage.getItem("audit:rattrapageEchec") || 0); }catch(e){}
   if(Date.now() - blocage < 6 * 3600000) return;   // le relais a refusé récemment : inutile d'insister
   rattrapageEnCours = true;
+  const debut = Date.now();
   try{
     const aFaire = cache.filter((a) => a._resume && globalStats(a).done === TOTAL_Q && !enLigneAJour(a)).slice(0, 3);
     for(const r of aFaire){
+      if(derniereActionCloud > debut) break;       // une action de l'utilisateur est arrivée entre-temps : on s'arrête là
       const e = etatEnvoi(r.id);
       if((current && current.id === r.id) || e.enCours || e.minuterie) continue;
       const audit = await dbGet(r.id);
@@ -1827,16 +1966,12 @@ async function rattrapageEnLigne(){
 }
 async function cloudLister(){
   const cle = reglages().cle || CLE_CLOUD_DEFAUT;
-  const resp = await fetch(RELAIS_CLOUD + "?cle=" + encodeURIComponent(cle) + "&sauvegardes=1");
-  const data = await resp.json();
-  if(data.erreur) throw new Error(data.erreur);
-  return data.audits || [];
+  const data = await demanderAuRelais("liste des sauvegardes", RELAIS_CLOUD + "?cle=" + encodeURIComponent(cle) + "&sauvegardes=1", {}, 90000);
+  return Array.isArray(data.audits) ? data.audits : [];
 }
 async function cloudCharger(id){
   const cle = reglages().cle || CLE_CLOUD_DEFAUT;
-  const resp = await fetch(RELAIS_CLOUD + "?cle=" + encodeURIComponent(cle) + "&charger=" + encodeURIComponent(id));
-  const data = await resp.json();
-  if(data.erreur) throw new Error(data.erreur);
+  const data = await demanderAuRelais("lecture d'un audit", RELAIS_CLOUD + "?cle=" + encodeURIComponent(cle) + "&charger=" + encodeURIComponent(id), {}, 240000);
   return data.audit;
 }
 
@@ -2072,52 +2207,96 @@ function openAnnotateur(qid, i){
   };
   img.src = p;
 }
-async function cloudToutSynchro(){
+function nomAudit(a){ return (enTexte(a.restaurant, 80) || "Audit sans nom") + (a.date ? " du " + fmtDate(enTexte(a.date, 40)) : ""); }
+/* Synchronisation complète. « surEtape » reçoit un texte d'avancement. Un audit qui pose problème n'arrête pas
+   les autres : il est listé dans « echecs ». Seule une coupure de connexion interrompt tout. */
+async function cloudToutSynchro(surEtape){
+  const etape = (t) => { try{ if(surEtape) surEtape(t); }catch(e){} };
+  actionCloudManuelle();
   await sauverMaintenant();
+  etape("Lecture de la liste du Drive…");
   const distants = (await cloudLister()).filter((x) => x && typeof x.id === "string");
   const tombes = supprimes(), vuesAvant = majVues(), vues = {};
-  let pousses = 0, importes = 0, illisibles = 0;
+  let pousses = 0, importes = 0, illisibles = 0, termine = false;
+  const echecs = [];
   const locaux = {}, dejaTraites = {};
   cache.forEach((a) => locaux[a.id] = a);
-  // 1) Envoi : ce qui n'est pas sur le Drive, ou qui a été modifié ici depuis le dernier envoi
-  for(const a of cache.slice()){
-    const dist = distants.find((x) => x.id === a.id);
-    const majDist = dist ? Date.parse(dist.maj) || 0 : 0;
-    if(dist && !((a.updatedAt || 0) > majDist) && !modifsNonEnvoyees(a)) continue;
-    dejaTraites[a.id] = true;
-    if(etatEnvoi(a.id).enCours) continue;            // un envoi automatique de cet audit est déjà en route
-    const complet = await chargerComplet(a.id);      // toujours l'audit complet, jamais la copie sans photos de la liste
-    if(!complet){ illisibles++; continue; }
-    await envoyerAudit(complet);
-    pousses++;
-  }
-  // 2) Réception : ce qui manque ici, ou que le Drive a en plus récent, sans jamais écraser des modifications non envoyées
-  for(const e of distants){
-    if(dejaTraites[e.id]) continue;
-    const loc = locaux[e.id];
-    const majDist = Date.parse(e.maj) || 0;
-    if(!loc){
-      if(tombes[e.id] && majDist <= tombes[e.id]) continue;   // supprimé sur cet appareil, et pas modifié ailleurs depuis
-    } else {
-      if(majDist <= (loc.updatedAt || 0) || modifsNonEnvoyees(loc)) continue;
-      // le Drive n'a pas bougé depuis la dernière synchronisation : inutile de re-télécharger
-      if(vuesAvant[e.id] !== undefined && vuesAvant[e.id] === e.maj){ vues[e.id] = e.maj; continue; }
-      // la date du Drive tombe pendant notre propre envoi : c'est le fichier que cet appareil vient d'y déposer
-      if(enLigneAJour(loc) && loc.cloudDebut && majDist >= loc.cloudDebut - 15000 && majDist <= (loc.cloudOk || 0) + 15000){ vues[e.id] = e.maj; continue; }
+  try{
+    // 1) Envoi : ce qui n'est pas sur le Drive, ou qui a été modifié ici depuis le dernier envoi
+    const aEnvoyer = cache.slice().filter((a) => {
+      const dist = distants.find((x) => x.id === a.id);
+      const majDist = dist ? Date.parse(dist.maj) || 0 : 0;
+      return !dist || (a.updatedAt || 0) > majDist || modifsNonEnvoyees(a);
+    });
+    let n = 0;
+    for(const a of aEnvoyer){
+      n++;
+      dejaTraites[a.id] = true;
+      if(etatEnvoi(a.id).enCours) continue;            // un envoi automatique de cet audit est déjà en route
+      etape("Envoi " + n + " / " + aEnvoyer.length + " — " + nomAudit(a));
+      const complet = await chargerComplet(a.id);      // toujours l'audit complet, jamais la copie sans photos de la liste
+      if(!complet){ illisibles++; continue; }
+      try{ await envoyerAudit(complet); pousses++; }
+      catch(err){
+        if(err.reseau) throw err;                      // plus de connexion : inutile d'insister
+        echecs.push("Envoi — " + nomAudit(a) + " : " + err.message);
+      }
     }
-    const audit = normaliserAudit(await cloudCharger(e.id));
-    if(!audit){ illisibles++; continue; }
-    audit.cloudVersion = audit.updatedAt; audit.cloudOk = Date.now(); audit.cloudDernier = audit.cloudOk;
-    audit.cloudComplet = globalStats(audit).done === TOTAL_Q;
-    delete audit.cloudDebut;
-    if(await dbPut(audit)){ oublierSuppression(e.id); vues[e.id] = e.maj; importes++; }
+    // 2) Réception : ce qui manque ici, ou que le Drive a en plus récent, sans jamais écraser des modifications non envoyées
+    const aRecevoir = [];
+    for(const e of distants){
+      if(dejaTraites[e.id]) continue;
+      const loc = locaux[e.id];
+      const majDist = Date.parse(e.maj) || 0;
+      if(!loc){
+        if(tombes[e.id] && majDist <= tombes[e.id]) continue;   // supprimé sur cet appareil, et pas modifié ailleurs depuis
+      } else {
+        if(majDist <= (loc.updatedAt || 0) || modifsNonEnvoyees(loc)) continue;
+        // le Drive n'a pas bougé depuis la dernière synchronisation : inutile de re-télécharger
+        if(vuesAvant[e.id] !== undefined && vuesAvant[e.id] === e.maj){ vues[e.id] = e.maj; continue; }
+        // la date du Drive tombe pendant notre propre envoi : c'est le fichier que cet appareil vient d'y déposer
+        if(enLigneAJour(loc) && loc.cloudDebut && majDist >= loc.cloudDebut - 15000 && majDist <= (loc.cloudOk || 0) + 15000){ vues[e.id] = e.maj; continue; }
+      }
+      aRecevoir.push(e);
+    }
+    n = 0;
+    for(const e of aRecevoir){
+      n++;
+      etape("Réception " + n + " / " + aRecevoir.length + " — " + nomAudit(e));
+      let audit = null;
+      try{ audit = normaliserAudit(await cloudCharger(e.id)); }
+      catch(err){
+        if(err.reseau) throw err;
+        echecs.push("Réception — " + nomAudit(e) + " : " + err.message);
+        continue;
+      }
+      if(!audit){ illisibles++; continue; }
+      audit.cloudVersion = audit.updatedAt; audit.cloudOk = Date.now(); audit.cloudDernier = audit.cloudOk;
+      audit.cloudComplet = globalStats(audit).done === TOTAL_Q;
+      delete audit.cloudDebut;
+      if(await dbPut(audit)){ oublierSuppression(e.id); vues[e.id] = e.maj; importes++; }
+    }
+    termine = true;
+  }finally{
+    // interrompue en route : on garde ce qui a déjà été vérifié, sans rien oublier de l'ancienne mémoire
+    noterMajVues(termine ? vues : Object.assign({}, vuesAvant, vues));
+    cache = await dbAllLege();
   }
-  noterMajVues(vues);
-  cache = await dbAllLege();
-  return { pousses, importes, illisibles };
+  return { pousses, importes, illisibles, echecs };
+}
+// Fenêtre d'explication pour un problème en ligne : elle reste affichée, le temps de lire ou de faire une capture
+function afficherProbleme(titre, message, lignes){
+  const liste = lignes || [];
+  showModal(`<h3>⚠️ ${esc(titre)}</h3>
+    <p style="font-size:14px; margin:0 0 10px; word-break:break-word;">${esc(message)}</p>
+    ${liste.slice(0, 6).map((l) => `<p class="meta" style="word-break:break-word; margin:6px 0;">• ${esc(l)}</p>`).join("")}
+    ${liste.length > 6 ? `<p class="meta">… et ${liste.length - 6} autre(s)</p>` : ""}
+    <p class="meta" style="margin-top:10px;">Rien n'est perdu : vos audits restent enregistrés sur l'appareil. Si le problème revient, faites une capture de cet écran.</p>
+    <button class="btn primary block" data-action="close-modal">Fermer</button>`);
 }
 async function cloudRestaurer(){
   try{
+    actionCloudManuelle();
     toast("Recherche des sauvegardes…");
     const liste = await cloudLister();
     if(!liste.length){
@@ -2131,7 +2310,7 @@ async function cloudRestaurer(){
         <span class="meta" style="display:block;">${esc(a.date || "?")} · ${Math.round((a.taille || 0) / 1024)} Ko</span></span>
         <button class="btn ghost" data-action="cloud-import" data-id="${esc(a.id)}" style="min-height:38px; padding:8px 12px;">Importer</button></div>`).join("")}
       <button class="btn primary block" data-action="close-modal" style="margin-top:10px;">Fermer</button>`);
-  }catch(e){ toast("Erreur : " + e.message); }
+  }catch(e){ afficherProbleme("Liste du Drive indisponible", e.message, []); }
 }
 
 /* =====================================================================
@@ -2208,10 +2387,19 @@ document.body.addEventListener("click", async (e) => {
     setTimeout(() => location.reload(), 900);
   }
   else if(act === "cloud-sync"){
-    toast("Synchronisation…");
-    cloudToutSynchro()
-      .then((r) => { toast("🔄 Synchronisé : " + r.pousses + " envoyé(s), " + r.importes + " importé(s) ✓" + (r.illisibles ? " · " + r.illisibles + " illisible(s), à réessayer" : "")); renderList(); })
-      .catch((e) => toast("Erreur : " + e.message));
+    // l'avancement reste affiché : une synchronisation avec photos peut durer plusieurs minutes
+    showModal(`<h3>🔄 Synchronisation</h3>
+      <p id="syncEtat" style="font-size:14px; margin:0 0 10px; word-break:break-word;">Préparation…</p>
+      <p class="meta">Gardez l'app ouverte jusqu'à la fin. Quoi qu'il arrive, vos audits restent enregistrés sur l'appareil.</p>`);
+    const etape = (t) => { const zone = document.getElementById("syncEtat"); if(zone) zone.textContent = t; };
+    cloudToutSynchro(etape)
+      .then((r) => {
+        if(state.view === "list") renderList();
+        const resume = r.pousses + " envoyé(s), " + r.importes + " importé(s)" + (r.illisibles ? ", " + r.illisibles + " illisible(s) à réessayer" : "");
+        if(r.echecs.length) afficherProbleme("Synchronisation incomplète", resume + ". " + r.echecs.length + " audit(s) n'ont pas pu être traités :", r.echecs);
+        else { if(document.getElementById("syncEtat")) closeModal(); toast("🔄 Synchronisé : " + resume + " ✓", 4000); }
+      })
+      .catch((e) => { if(state.view === "list") renderList(); afficherProbleme("Synchronisation impossible", e.message, []); });
   }
   else if(act === "export-json"){ exportJSON().catch((e) => toast("Sauvegarde impossible pour l'instant (" + e.message + ") — aucun fichier créé, réessayez")); }
   else if(act === "import-json") document.getElementById("importInput").click();
@@ -2288,13 +2476,15 @@ document.body.addEventListener("click", async (e) => {
     // toujours l'audit complet : jamais la copie sans photos de la liste
     const rec = act === "cloud-save" ? await chargerComplet(el.dataset.id) : current;
     if(!rec){ toast("Lecture de l'audit impossible pour l'instant — réessayez dans un instant"); return; }
+    actionCloudManuelle();
     toast("Sauvegarde en ligne…");
     envoyerAudit(rec)
       .then(() => toast("☁️ Sauvegardé dans votre Drive ✓"))
-      .catch((e) => toast("Erreur : " + e.message));
+      .catch((e) => toast("Erreur : " + e.message, 8000));
   }
   else if(act === "cloud-restore"){ cloudRestaurer(); }
   else if(act === "cloud-import"){
+    actionCloudManuelle();
     toast("Import depuis le Drive…");
     cloudCharger(el.dataset.id)
       .then(async (brut) => {
@@ -2312,7 +2502,7 @@ document.body.addEventListener("click", async (e) => {
         renderList();
         toast("Audit importé depuis le Drive ✓");
       })
-      .catch((e) => toast("Erreur : " + e.message));
+      .catch((e) => toast("Erreur : " + e.message, 8000));
   }
   else if(act === "open-suivi"){ state.view = "suivi"; render(); }
   else if(act === "add-cam"){
@@ -2368,7 +2558,9 @@ document.body.addEventListener("click", async (e) => {
     if(current){
       current.signatures = current.signatures || {};
       delete current.signatures[role];
+      if(current.sigInfos) delete current.sigInfos[role];
       scheduleSave();
+      majEtatSignatures(current);
     }
   }
   else if(act === "ann-open"){ state.ann = { qid:el.dataset.qid, i:parseInt(el.dataset.i, 10) }; openAnnotateur(el.dataset.qid, parseInt(el.dataset.i, 10)); }
@@ -2651,7 +2843,7 @@ function afficherPreparation(fait, total){
     if(!reglages().cle){ const r = reglages(); r.cle = CLE_CLOUD_DEFAUT; saveReglages(r); }
     renderList();
     demarre = true;
-    setTimeout(() => { rattrapageEnLigne().catch(console.error); }, 6000);
+    setTimeout(() => { rattrapageEnLigne().catch(console.error); }, 15000);
   }catch(e){
     const el = document.getElementById("app");
     if(el) el.innerHTML = '<div class="wrap" style="padding-top:30px;"><div class="card" style="border:2px solid var(--bad);"><h3>⚠️ Erreur de démarrage</h3><p class="meta" style="word-break:break-all;">'
