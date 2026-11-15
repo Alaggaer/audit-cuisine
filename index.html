@@ -231,6 +231,17 @@
   .navrow::-webkit-scrollbar{display:none;}
   .navchip,.vetochip{border:1.5px solid var(--line); background:#fff; border-radius:99px;
     padding:6px 12px; font-size:12.5px; font-weight:700; color:#475569; flex:none;}
+  .badge-prop{display:inline-block; font-size:11.5px; font-weight:800; color:var(--brand-dark); background:var(--brand-soft);
+    border-radius:99px; padding:1px 8px; vertical-align:middle;}
+  .typechoix{display:flex; gap:8px;}
+  .typebtn{flex:1; border:2px solid var(--line); background:#fff; border-radius:12px; padding:10px 8px; text-align:center;
+    cursor:pointer; font:inherit; color:inherit;}
+  .typebtn b{display:block; font-size:15px;}
+  .typebtn small{display:block; color:var(--muted); font-size:12px; margin-top:2px;}
+  .typebtn.sel{border-color:var(--brand); background:#f0fdfa; box-shadow:inset 0 0 0 1px var(--brand);}
+  .typebtn:disabled{opacity:.5; cursor:default;}
+  .propq{display:flex; gap:10px; align-items:flex-start; padding:9px 2px; border-top:1px solid var(--line); font-size:14px; cursor:pointer;}
+  .propq input{width:20px; height:20px; flex:none; margin:1px 0 0; accent-color:var(--brand);}
   .navchip.active,.vetochip.sel{background:var(--brand); border-color:var(--brand); color:#fff;}
   .critphoto{display:block; width:100%; background:#fff7ed; color:#9a3412; border:2px solid #f97316;
     border-radius:10px; padding:9px 10px; font-size:12.5px; font-weight:800; margin-top:8px;
@@ -436,8 +447,55 @@ SECTIONS.forEach((s) => {
     s.questions.forEach((q, j) => { q.id = "s12q" + (j + 1); });
   }
 });
+SECTIONS.forEach((s, i) => { s.idx = i; });   // rang de la section dans la grille complète
 let TOTAL_Q = SECTIONS.reduce((a, s) => a + s.questions.length, 0);
 function recalcTotal(){ TOTAL_Q = SECTIONS.reduce((a, s) => a + s.questions.length, 0); }
+
+/* ---- Deux types d'audit : « classique » (toute la grille) ou « propreté » (les questions de propreté seulement).
+   Un audit propreté garde la liste de ses questions (perimetre) : changer la sélection dans les réglages
+   ne concerne que les audits propreté créés ensuite, jamais les scores des audits déjà faits. ---- */
+const PROPRETE_DEFAUT = [
+  "s2q6", "s2q13", "s2q15", "s2q18",                 // planning de nettoyage, lavettes, produits d'entretien, déchets
+  "s4q4", "s5q4", "s6q4", "s7q4", "s8q4", "s9q4",    // chambres froides, frigos des postes, étagères de l'épicerie
+  "s10q1", "s10q6", "s10q9", "s10q10",               // tenues, tabliers et torchons, vestiaires, toilettes
+  "s11q2", "s11q4", "s11q5",                         // poubelles, petit matériel, matériel de plonge
+  ...Array.from({ length:18 }, (_, j) => "s11q" + (j + 6)),   // toute la section « Matériels »
+  "s12q12", "s12q16"                                 // propreté des postes pendant et après le service
+];
+function estProprete(a){ return !!a && a.type === "proprete"; }
+// Questions retenues pour les prochains audits propreté (réglages), sinon la sélection par défaut
+function questionsProprete(){
+  const l = reglages().proprete;
+  return Array.isArray(l) ? l.filter((x) => typeof x === "string") : PROPRETE_DEFAUT.slice();
+}
+// Sections et questions d'un audit : toute la grille, ou pour un audit propreté ses seules questions
+// (les sections sans aucune question retenue disparaissent ; « idx » garde le rang d'origine de la section)
+const grillesMemo = new Map();
+function grilleDe(audit){
+  if(!estProprete(audit)) return SECTIONS;
+  const ids = Array.isArray(audit.perimetre) ? audit.perimetre : questionsProprete();
+  const cle = ids.join(",");
+  let g = grillesMemo.get(cle);
+  if(!g){
+    const garde = new Set(ids);
+    g = [];
+    SECTIONS.forEach((s) => {
+      const qs = s.questions.filter((q) => garde.has(q.id));
+      if(qs.length) g.push(Object.assign({}, s, { questions:qs }));
+    });
+    grillesMemo.set(cle, g);
+  }
+  return g.length ? g : SECTIONS;   // aucune question reconnue : on montre toute la grille plutôt qu'un audit vide
+}
+function totalDe(audit){ return grilleDe(audit).reduce((n, s) => n + s.questions.length, 0); }
+// Identifiants retenus (« garde »), dans l'ordre de la grille et sans ceux des questions qui n'existent plus
+function idsDansLaGrille(garde){
+  const ids = [];
+  SECTIONS.forEach((s) => s.questions.forEach((q) => { if(garde.has(q.id)) ids.push(q.id); }));
+  return ids;
+}
+function idsProprete(){ return idsDansLaGrille(new Set(questionsProprete())); }
+function libelleType(a){ return estProprete(a) ? "Audit propreté" : "Audit classique"; }
 
 /* ---- Réglages locaux ---- */
 function reglages(){ try{ return JSON.parse(localStorage.getItem("audit:reglages") || "{}"); }catch(e){ return {}; } }
@@ -461,6 +519,7 @@ function appliquerGrillePerso(){
     if(!s) return;
     s.questions.push({ t:p.t, id:p.id, perso:true });
   });
+  grillesMemo.clear();   // les grilles des audits propreté sont recalculées avec les questions perso à jour
   recalcTotal();
 }
 function restosUniques(){
@@ -508,6 +567,8 @@ function assainir(a){
   if(a.mesures){ for(const k in a.mesures){ if(typeof a.mesures[k] !== "string") a.mesures[k] = enTexte(a.mesures[k], 30); } }
   if(a.rappels){ for(const k in a.rappels){ if(!estObjet(a.rappels[k])) delete a.rappels[k]; } }
   if(a.signatures){ for(const k in a.signatures){ if(typeof a.signatures[k] !== "string") delete a.signatures[k]; } }
+  if(a.type !== undefined && a.type !== "proprete") delete a.type;
+  if(a.perimetre !== undefined && !(Array.isArray(a.perimetre) && a.perimetre.every((x) => typeof x === "string"))) delete a.perimetre;
   return a;
 }
 // Copie contrôlée d'un audit reçu de l'extérieur (fichier importé, Drive) ; null s'il est inutilisable
@@ -541,6 +602,10 @@ function normaliserAudit(brut){
   ["startedAt", "completedAt", "cloudOk", "cloudDernier", "cloudVersion", "cloudDebut", "cloudTaille"].forEach((k) => { const n = nombre(brut[k]); if(n) a[k] = n; });
   if(brut.cloudComplet === true) a.cloudComplet = true;
   if(typeof brut.suiviDe === "string" && brut.suiviDe.length <= 80) a.suiviDe = brut.suiviDe;
+  if(brut.type === "proprete"){
+    a.type = "proprete";
+    if(Array.isArray(brut.perimetre)) a.perimetre = brut.perimetre.filter((x) => typeof x === "string" && CLE_SURE.test(x)).slice(0, 1000);
+  }
   a.answers = champs(brut.answers, (v) => (v === "oui" || v === "non" || v === "na") ? v : undefined);
   a.notes = champs(brut.notes, (v) => { const t = enTexte(v, 5000); return t ? t : undefined; });
   a.photos = champs(brut.photos, (v) => { const l = Array.isArray(v) ? v.filter(estImage) : []; return l.length ? l : undefined; });
@@ -571,12 +636,16 @@ function remplacementRisque(local, nouveau){
   return (nouveau.updatedAt || 0) < (local.updatedAt || 0) || nbPhotos(nouveau) < photosLocales;
 }
 /* Un audit compte dans le suivi quand il est terminé (toutes les questions de la grille d'origine ont une réponse).
-   Une question perso ajoutée plus tard ne fait donc pas disparaître les anciens audits des courbes. */
+   Une question perso ajoutée plus tard ne fait donc pas disparaître les anciens audits des courbes.
+   Un audit propreté est terminé quand toutes ses questions (choisies à sa création) ont une réponse. */
 function auditTermine(a){
   if(a.completedAt) return true;
-  for(const s of SECTIONS){ for(const q of s.questions){ if(!q.perso && !a.answers[q.id]) return false; } }
+  const prop = estProprete(a);
+  for(const s of grilleDe(a)){ for(const q of s.questions){ if((prop || !q.perso) && !a.answers[q.id]) return false; } }
   return true;
 }
+// Toutes les questions de l'audit ont une réponse
+function estComplet(a){ const g = globalStats(a); return g.done >= g.total; }
 function parDate(a, b){ return (a.date || "").localeCompare(b.date || "") || (a.createdAt || 0) - (b.createdAt || 0); }
 
 /* ---- Signatures : on retient quand chacune a été faite, et sur quel contenu, pour signaler dans le rapport
@@ -591,6 +660,8 @@ function empreinteAudit(a){
     remplis(a.actions, (v) => (v && (v.echeance || v.quand)) ? (v.echeance || "") + "|" + (v.quand || "") : ""),
     remplis(a.photos, (l) => (Array.isArray(l) && l.length) ? l.map((p) => String(p).length + ":" + String(p).slice(-48)).join(",") : "")
   ];
+  // le type ne compte que pour un audit propreté : l'empreinte des audits classiques déjà signés ne change pas
+  if(estProprete(a)) contenu.push("proprete", (a.perimetre || []).join(","));
   const texte = JSON.stringify(contenu);
   let h1 = 5381, h2 = 52711;
   for(let i = 0; i < texte.length; i++){ const c = texte.charCodeAt(i); h1 = ((h1 * 33) ^ c) >>> 0; h2 = (Math.imul(h2, 31) + c) >>> 0; }
@@ -913,7 +984,7 @@ async function enregistrer(audit){
     // l'heure de début est posée à la première réponse, quelle que soit la façon de répondre (bouton, « Tout Oui », relevé)
     if(!audit.startedAt && gs.done > 0) audit.startedAt = Date.now();
     // l'heure de fin est posée AVANT l'écriture, pour être enregistrée avec la dernière réponse
-    if(gs.done === TOTAL_Q){ if(!audit.completedAt) audit.completedAt = Date.now(); }
+    if(gs.done === gs.total){ if(!audit.completedAt) audit.completedAt = Date.now(); }
     else delete audit.completedAt;
     const ok = await dbPut(audit);
     if(audit === current) setSaveStatus(ok ? "saved" : "error");
@@ -943,10 +1014,21 @@ function sectionStats(sec, audit){
   const pct = (done / sec.questions.length) * 100;
   return { oui, non, na, total:sec.questions.length, answered, done, score, pct };
 }
+// parts suit l'ordre de grilleDe(audit) : pour un audit propreté, seulement ses sections
 function globalStats(audit){
-  const parts = SECTIONS.map(s => sectionStats(s, audit));
-  const scores = parts.filter(p => p.score !== null).map(p => p.score);
-  const scoreBrut = scores.length ? scores.reduce((a,b) => a+b, 0) / scores.length : null;
+  const parts = grilleDe(audit).map(s => sectionStats(s, audit));
+  const total = parts.reduce((a,p) => a + p.total, 0);
+  let scoreBrut;
+  if(estProprete(audit)){
+    // Audit propreté : chaque question compte autant (part des réponses conformes, N/A et « sans réponse » exclus).
+    // Une section d'une seule question ne pèse donc pas autant que les 18 matériels.
+    const oui = parts.reduce((a,p) => a + p.oui, 0), repondues = parts.reduce((a,p) => a + p.answered, 0);
+    scoreBrut = repondues ? (oui / repondues) * 100 : null;
+  } else {
+    // Audit classique : moyenne des scores de section (règle du fichier Excel)
+    const scores = parts.filter(p => p.score !== null).map(p => p.score);
+    scoreBrut = scores.length ? scores.reduce((a,b) => a+b, 0) / scores.length : null;
+  }
   const done = parts.reduce((a,p) => a + p.done, 0);
   // Veto HACCP : plafonnement ou malus en cas de non-conformité critique
   const nbCrit = criticalsNC(audit).length;
@@ -956,11 +1038,11 @@ function globalStats(audit){
     if(v === "plafond" && scoreBrut > 69){ score = 69; veto = "Score plafonné à 69 % (non-conformité critique HACCP)"; }
     else if(v === "malus"){ score = Math.max(0, scoreBrut - 10 * nbCrit); veto = "Malus appliqué : −10 pts par non-conformité critique (" + nbCrit + ")"; }
   }
-  return { parts, score, scoreBrut, veto, pct:(done / TOTAL_Q) * 100, done };
+  return { parts, score, scoreBrut, veto, pct:total ? (done / total) * 100 : 0, done, total };
 }
 function criticalsNC(audit){
   const out = [];
-  SECTIONS.forEach((s) => s.questions.forEach((q) => {
+  grilleDe(audit).forEach((s) => s.questions.forEach((q) => {
     if(q.crit && audit.answers[q.id] === (q.inv ? "oui" : "non")) out.push(q);
   }));
   return out;
@@ -1128,11 +1210,12 @@ function render(){
   else if(state.view === "report") renderReport();
   else if(state.view === "suivi") renderSuivi();
   else if(state.view === "grille") renderGrille();
+  else if(state.view === "proprete") renderProprete();
 }
 
 /* ---------- Accueil : liste des audits ---------- */
 function metaCarte(a, gs){
-  return `${esc(fmtDate(a.date))} · ${gs.done}/${TOTAL_Q} répondues${enLigneAJour(a) ? " · ☁️" : ""}`;
+  return `${esc(fmtDate(a.date))} · ${gs.done}/${gs.total} répondues${enLigneAJour(a) ? " · ☁️" : ""}`;
 }
 // Met à jour le symbole ☁️ d'une carte sans redessiner toute la liste (un envoi peut finir pendant qu'on la consulte)
 function majCarteEnLigne(id){
@@ -1148,7 +1231,7 @@ function majCarteEnLigne(id){
 function renderList(){
   current = null;
   cache.sort((a,b) => (b.updatedAt||0) - (a.updatedAt||0));
-  const enCours = cache.filter((a) => globalStats(a).done < TOTAL_Q)
+  const enCours = cache.filter((a) => !estComplet(a))
     .sort((a,b) => (b.updatedAt||0) - (a.updatedAt||0))[0];
   let html = `
   <div class="topbar noprint"><div class="tb-in">
@@ -1172,7 +1255,7 @@ function renderList(){
   if(enCours){
     const gs = globalStats(enCours);
     html += `<button class="btn ghost block" data-action="open-audit" data-id="${esc(enCours.id)}" style="margin-top:8px;">
-      ▶ Reprendre : ${esc(enCours.restaurant || "Audit")} · ${gs.done}/${TOTAL_Q} répondues</button>`;
+      ▶ Reprendre : ${esc(enCours.restaurant || "Audit")}${estProprete(enCours) ? " (propreté)" : ""} · ${gs.done}/${gs.total} répondues</button>`;
   }
   if(cache.length === 0){
     html += `<div class="empty">Aucun audit pour l'instant.<br>Creez votre premier audit : il sera sauvegardé automatiquement sur l'appareil.</div>`;
@@ -1184,7 +1267,9 @@ function renderList(){
     const idc = esc(a.id);
     const termine = auditTermine(a);
     // l'écart avec l'audit précédent n'a de sens qu'entre deux audits terminés
+    // … et du même type : un audit propreté ne se compare pas à un audit classique
     const anterieurs = !termine ? [] : cache.filter((x) => x.id !== a.id
+      && estProprete(x) === estProprete(a)
       && (x.restaurant || "").trim() === (a.restaurant || "").trim()
       && globalStats(x).score !== null && auditTermine(x)
       && ((x.date || "") < (a.date || "") || ((x.date || "") === (a.date || "") && (x.createdAt || 0) < (a.createdAt || 0))))
@@ -1201,14 +1286,14 @@ function renderList(){
     <div class="card">
       <div class="card-head" data-action="open-audit" data-id="${idc}">
         <div style="flex:1; min-width:0;">
-          <p class="card-title">${esc(a.restaurant || "Audit sans nom")}${nbCrit ? ` <span style="color:var(--bad);">⚠️ critique</span>` : ""}${a.suiviDe ? ` <span style="color:var(--warn); font-size:12px;">🔁 contre-visite</span>` : ""}</p>
+          <p class="card-title">${esc(a.restaurant || "Audit sans nom")}${nbCrit ? ` <span style="color:var(--bad);">⚠️ critique</span>` : ""}${a.suiviDe ? ` <span style="color:var(--warn); font-size:12px;">🔁 contre-visite</span>` : ""}${estProprete(a) ? ` <span class="badge-prop">🧽 propreté</span>` : ""}</p>
           <div class="meta">${metaCarte(a, gs)}</div>
           <div class="bar"><i style="width:${gs.pct}%; background:${ic.color};"></i></div>
         </div>
         <span class="scorechip" style="background:${ic.color};">${gs.score === null ? "—" : Math.round(gs.score) + "%"}${deltaHtml}</span>
       </div>
       <div class="row-actions">
-        <button class="btn ghost" data-action="open-audit" data-id="${idc}">${gs.done < TOTAL_Q ? "✏️ Continuer" : "📂 Ouvrir"}</button>
+        <button class="btn ghost" data-action="open-audit" data-id="${idc}">${gs.done < gs.total ? "✏️ Continuer" : "📂 Ouvrir"}</button>
         <button class="btn ghost" data-action="open-report" data-id="${idc}">📊 Rapport</button>
         <button class="btn ghost" data-action="suivi-audit" data-id="${idc}">🔁 Contre-visite</button>
         <button class="btn ghost" data-action="cloud-save" data-id="${idc}" title="Sauvegarder en ligne">${enLigneAJour(a) ? "☁️✓" : "☁️"}</button>
@@ -1253,7 +1338,8 @@ function qCardHtml(q, num, audit){
   const defaut = audit.answers[q.id] === (q.inv ? "oui" : "non");
   const rem = (audit.rappels || {})[q.id];
   const echeances = [["Immédiat", 0], ["48 h", 2], ["7 jours", 7], ["Prochain audit", "audit"]];
-  const numSec = state.sec + 1;
+  const secCourante = grilleDe(audit)[state.sec];
+  const numSec = (secCourante ? secCourante.idx : state.sec) + 1;   // rang d'origine : mêmes mots-clés qu'en audit classique
   const tagsList = TAGS_PAR_SECTION[numSec] || TAGS_AUDIT;
   const mesv = (audit.mesures || {})[q.id] || "";
   return `
@@ -1305,7 +1391,9 @@ function renderAudit(garder){   // garder = true : mise à jour sur place, sans 
   const audit = current;
   if(!audit){ state.view = "list"; return render(); }
   const yAvant = window.scrollY;
-  const sec = SECTIONS[state.sec];
+  const G = grilleDe(audit);   // sections de cet audit : toutes, ou celles de la propreté
+  if(!(state.sec >= 0 && state.sec < G.length)) state.sec = 0;
+  const sec = G[state.sec];
   const gs = globalStats(audit);
   const st = sectionStats(sec, audit);
   const gic = interp(gs.score);
@@ -1314,7 +1402,7 @@ function renderAudit(garder){   // garder = true : mise à jour sur place, sans 
   if(modeFocus) state.fq = Math.max(0, Math.min(sec.questions.length - 1, state.fq));
 
   let chips = "";
-  SECTIONS.forEach((s, i) => {
+  G.forEach((s, i) => {
     const sti = sectionStats(s, audit);
     chips += `<button class="chip ${i === state.sec ? "active" : ""} ${sti.done === sti.total ? "done" : ""}" id="chip-${i}"
       data-action="goto-section" data-i="${i}"><span>${s.icon}</span><span>${esc(s.short)}</span>
@@ -1341,8 +1429,8 @@ function renderAudit(garder){   // garder = true : mise à jour sur place, sans 
     }
   }
 
-  const prev = state.sec > 0 ? SECTIONS[state.sec - 1] : null;
-  const next = state.sec < SECTIONS.length - 1 ? SECTIONS[state.sec + 1] : null;
+  const prev = state.sec > 0 ? G[state.sec - 1] : null;
+  const next = state.sec < G.length - 1 ? G[state.sec + 1] : null;
   const footer = modeFocus ? `
   <div class="footerbar noprint"><div class="fb-in">
     <button class="fbtn ghost" data-action="fq" data-d="-1" ${state.fq === 0 ? "disabled" : ""}>◀ Précédente</button>
@@ -1364,7 +1452,7 @@ function renderAudit(garder){   // garder = true : mise à jour sur place, sans 
       <button class="tb-back" data-action="back-home">←</button>
       <div class="tb-title" data-action="edit-info" style="cursor:pointer;">
         <b>${esc(audit.restaurant || "Audit")}</b>
-        <small>${esc(fmtDate(audit.date))} · ${esc(audit.auditor || "")} ${audit.auditor ? "·" : ""} <u>modifier</u></small>
+        <small>${estProprete(audit) ? "🧽 Propreté · " : ""}${esc(fmtDate(audit.date))} · ${esc(audit.auditor || "")} ${audit.auditor ? "·" : ""} <u>modifier</u></small>
       </div>
       <span class="scorechip" id="hScore" style="background:${gic.color};">${gs.score === null ? "—" : Math.round(gs.score) + "%"}</span>
       <button class="tb-back" data-action="open-report-current" title="Voir le rapport">📊</button>
@@ -1420,7 +1508,8 @@ function updateLive(){
   }
   const bar = document.getElementById("hBar");
   if(bar) bar.style.width = gs.pct + "%";
-  SECTIONS.forEach((s, i) => {
+  const G = grilleDe(current);
+  G.forEach((s, i) => {
     const el = document.getElementById("chip-" + i);
     if(!el) return;
     const sti = sectionStats(s, current);
@@ -1428,8 +1517,8 @@ function updateLive(){
     if(c) c.textContent = sti.done + "/" + sti.total;
     el.classList.toggle("done", sti.done === sti.total);
   });
-  if(SECTIONS[state.sec]){
-    const st = sectionStats(SECTIONS[state.sec], current);
+  if(G[state.sec]){
+    const st = sectionStats(G[state.sec], current);
     const ss = document.getElementById("secScore");
     if(ss){
       if(st.score === null){ ss.textContent = "—"; ss.style.background = "#94a3b8"; }
@@ -1453,9 +1542,10 @@ function renderReport(){
   const logo = reglages().logo;
   const critiques = criticalsNC(audit);
   const termine = auditTermine(audit);   // tant que l'audit n'est pas terminé, le score n'est qu'indicatif
+  const G = grilleDe(audit);             // même ordre que gs.parts
 
   let secRows = "";
-  SECTIONS.forEach((s, i) => {
+  G.forEach((s, i) => {
     const st = gs.parts[i];
     const col = st.score === null ? "#94a3b8" : interp(st.score).color;
     secRows += `
@@ -1471,7 +1561,7 @@ function renderReport(){
 
   let nc = "";
   let ncCount = 0;
-  SECTIONS.forEach((s, i) => {
+  G.forEach((s, i) => {
     const items = s.questions.filter(q => audit.answers[q.id] === (q.inv ? "oui" : "non"));
     if(!items.length) return;
     ncCount += items.length;
@@ -1495,7 +1585,7 @@ function renderReport(){
   app.innerHTML = `
   <div class="topbar noprint"><div class="tb-in">
     <button class="tb-back" data-action="back-from-report">←</button>
-    <div class="tb-title"><b>Rapport d'audit</b><small>${esc(audit.restaurant || "")} · ${esc(fmtDate(audit.date))}</small></div>
+    <div class="tb-title"><b>Rapport d'audit${estProprete(audit) ? " propreté" : ""}</b><small>${esc(audit.restaurant || "")} · ${esc(fmtDate(audit.date))}</small></div>
   </div></div>
   <div class="wrap">
     ${critiques.length ? `<div class="crit-banner">🚨 ${critiques.length} non-conformité${critiques.length > 1 ? "s" : ""} critique${critiques.length > 1 ? "s" : ""} HACCP — action immédiate requise, quel que soit le score global</div>` : ""}
@@ -1509,12 +1599,13 @@ function renderReport(){
             stroke-linecap="round" stroke-dasharray="${circ}" stroke-dashoffset="${off}"/>
         </svg>
         <div class="gval"><b style="color:${ic.color};">${gs.score === null ? "—" : Math.round(gs.score) + "%"}</b>
-        <small>${gs.done}/${TOTAL_Q} questions</small></div>
+        <small>${gs.done}/${gs.total} questions</small></div>
       </div>
       <div class="interp" style="background:${termine ? ic.color : "#64748b"};">${termine ? ic.label : "Score provisoire"}</div>
       ${gs.veto ? `<div class="meta" style="margin-top:8px; color:var(--bad); font-weight:700;">⚖️ ${esc(gs.veto)}${gs.scoreBrut !== null ? " — score brut : " + Math.round(gs.scoreBrut) + " %" : ""}</div>` : ""}
-      ${gs.done < TOTAL_Q ? `<div class="meta" style="margin-top:8px;">⚠️ Audit incomplet : score calculé sur les réponses saisies</div>` : ""}
+      ${gs.done < gs.total ? `<div class="meta" style="margin-top:8px;">⚠️ Audit incomplet : score calculé sur les réponses saisies</div>` : ""}
     </div>
+    ${estProprete(audit) ? `<p class="rep-meta">🧽 <b>Audit propreté</b> : ${gs.total} questions de propreté, réparties en ${G.length} section${G.length > 1 ? "s" : ""}</p>` : ""}
     <p class="rep-meta">Restaurant : <b>${esc(audit.restaurant || "—")}</b> · Auditeur : <b>${esc(audit.auditor || "—")}</b><br>
     ${esc(fmtDate(audit.date))} · N/A exclu du calcul, comme les « sans réponse »</p>
     ${(audit.startedAt && audit.completedAt > audit.startedAt) ? `<p class="rep-meta">⏱️ Audit réalisé de ${new Date(audit.startedAt).toLocaleTimeString("fr-FR", { hour:"2-digit", minute:"2-digit" })} à ${new Date(audit.completedAt).toLocaleTimeString("fr-FR", { hour:"2-digit", minute:"2-digit" })} (${Math.floor(Math.round((audit.completedAt - audit.startedAt) / 60000) / 60)} h ${String(Math.round((audit.completedAt - audit.startedAt) / 60000) % 60).padStart(2, "0")})</p>` : ""}
@@ -1542,7 +1633,7 @@ function renderReport(){
       <p class="meta" style="margin:8px 2px 0;">Signez au doigt : les signatures apparaissent dans le rapport imprimé et partagé. Si l'audit est modifié ensuite, le rapport le signale.</p>
     </div>
     <p class="legend">Barème : 95–100 Excellent · 90–94 Très bien · 80–89 Conforme · 70–79 À améliorer · 60–69 Insuffisant · &lt;60 Audit à refaire d'urgence.<br>
-    Score global = moyenne des ${SECTIONS.length} scores de section (règle identique au fichier Excel).</p>
+    ${estProprete(audit) ? "Score global = part des réponses conformes : chaque question compte autant." : `Score global = moyenne des ${G.length} scores de section (règle identique au fichier Excel).`}</p>
   </div>`;
   initSignatures(audit);
   majEtatSignatures(audit);
@@ -1605,10 +1696,21 @@ function showModal(html){
     <div class="sheet">${html}</div></div>`;
   overlay.style.display = "block";
 }
+// Deux boutons « Classique / Propreté » (le choix est lu dans state.typeChoisi)
+function choixTypeHtml(type){
+  const nbProp = idsProprete().length;
+  state.typeChoisi = type === "proprete" ? "proprete" : "classique";
+  return `<div class="field"><label>Type d'audit</label>
+    <div class="typechoix">
+      <button type="button" class="typebtn ${state.typeChoisi === "classique" ? "sel" : ""}" data-action="choix-type" data-v="classique"><b>📋 Classique</b><small>toutes les questions (${TOTAL_Q})</small></button>
+      <button type="button" class="typebtn ${state.typeChoisi === "proprete" ? "sel" : ""}" data-action="choix-type" data-v="proprete" ${nbProp ? "" : "disabled"}><b>🧽 Propreté</b><small>${nbProp ? nbProp + " questions de propreté" : "aucune question choisie"}</small></button>
+    </div></div>`;
+}
 function modalNewAudit(){
   const restos = restosUniques();
   showModal(`
     <h3>Nouvel audit</h3>
+    ${choixTypeHtml("classique")}
     <div class="field"><label>Restaurant / établissement *</label>
       <input id="fRest" type="text" list="listeRestos" placeholder="Ex. Restaurant Centre" autocomplete="off">
       <datalist id="listeRestos">${restos.map((r) => `<option value="${esc(r)}">`).join("")}</datalist></div>
@@ -1624,6 +1726,7 @@ function modalEditInfo(){
   const restos = restosUniques();
   showModal(`
     <h3>Infos de l'audit</h3>
+    ${choixTypeHtml(current.type)}
     <div class="field"><label>Restaurant / établissement</label>
       <input id="fRest" type="text" list="listeRestos" value="${esc(current.restaurant || "")}">
       <datalist id="listeRestos">${restos.map((r) => `<option value="${esc(r)}">`).join("")}</datalist></div>
@@ -1647,6 +1750,7 @@ function modalReglages(){
       <label for="fFocus" style="margin:0;">Mode focus : une question par écran 👆</label></div>
     <p class="meta" style="margin:8px 0;">En mode focus, répondez et l'app avance toute seule vers la prochaine question à contrôler. On peut aussi glisser avec le doigt.</p>
     <button class="btn ghost block" data-action="nav" data-v="grille">📝 Modifier la grille (questions perso)</button>
+    <button class="btn ghost block" data-action="nav" data-v="proprete" style="margin-top:8px;">🧽 Questions de l'audit propreté (${idsProprete().length})</button>
     <h3 style="margin:18px 0 10px;">🚨 Non-conformités critiques</h3>
     <div class="chipgrp"><span class="chiplab">Effet :</span>
       <button class="vetochip ${(r.vetocrit || "aucun") === "aucun" ? "sel" : ""}" data-action="vetocrit" data-v="aucun">Alerte seule</button>
@@ -1663,6 +1767,7 @@ function modalReglages(){
     <button class="btn ghost block" data-action="reparer" style="margin-top:8px;">🧹 Réparer l'affichage (cache de l'app)</button>
     <p class="meta" style="margin:8px 0 0;">Les audits sont copiés dans votre Google Drive (dossier « Audit Cuisine Sauvegardes ») pendant la saisie, puis une fois terminés — à l'abri même si le téléphone est perdu.</p>
     ${vRelais ? `<p class="meta" style="margin:8px 0 0;">Relais en service : ${vRelais === "ancien" ? "ancienne version (antérieure à la 4.4)" : "version " + esc(vRelais)}</p>` : ""}
+    <button class="btn ghost block" data-action="verifier-relais" style="margin-top:8px;">🔎 Vérifier la version du relais</button>
     ${pb ? `<p class="meta" style="margin:8px 0 0; word-break:break-word; color:var(--warn);">Dernier problème en ligne (${esc(dateHeure(pb.quand))}) : ${esc(pb.message)}</p>` : ""}
     <button class="btn primary block" data-action="close-modal" style="margin-top:10px;">Fermer</button>`);
 }
@@ -1709,7 +1814,7 @@ async function exportJSON(){
 function exportCSV(){
   if(!current) return;
   const lines = ["Restaurant;Date;Auditeur;Section;Question;Reponse;Commentaire;Nb photos"];
-  SECTIONS.forEach(s => s.questions.forEach(q => {
+  grilleDe(current).forEach(s => s.questions.forEach(q => {
     const a = current.answers[q.id] || "";
     const rep = a === "oui" ? "Oui" : a === "non" ? "Non" : a === "na" ? "N/A" : "";
     lines.push([
@@ -1721,8 +1826,9 @@ function exportCSV(){
   const gs = globalStats(current);
   lines.push("");
   lines.push("SCORE GLOBAL;;;;;" + (gs.score === null ? "" : Math.round(gs.score) + " %") + ";" + interp(gs.score).label);
+  if(estProprete(current)) lines.push("TYPE D'AUDIT;;;;;Propreté");
   download(new Blob(["\uFEFF" + lines.join("\r\n")], { type:"text/csv;charset=utf-8" }),
-    "audit-" + safeName(current.restaurant) + "-" + current.date + ".csv");
+    (estProprete(current) ? "audit-proprete-" : "audit-") + safeName(current.restaurant) + "-" + current.date + ".csv");
 }
 function buildReportHtml(audit){
   const gs = globalStats(audit);
@@ -1731,8 +1837,10 @@ function buildReportHtml(audit){
   const termine = auditTermine(audit);
   const etatsSig = etatsSignatures(audit);
   const alerteSig = alerteSignatures(etatsSig);   // « modifié après signature », le cas échéant
+  const G = grilleDe(audit);                      // même ordre que gs.parts
+  const titre = estProprete(audit) ? "🧽 Audit propreté" : "🧑‍🍳 Audit Cuisine";
   let body = "";
-  SECTIONS.forEach((s, i) => {
+  G.forEach((s, i) => {
     const st = gs.parts[i];
     const col = st.score === null ? "#94a3b8" : interp(st.score).color;
     body += `<tr><td>${esc(s.title)}</td><td style="color:${col};font-weight:700;">${st.score === null ? "—" : Math.round(st.score) + " %"}</td>
@@ -1740,7 +1848,7 @@ function buildReportHtml(audit){
   });
   let details = "";
   let planLignes = "";
-  SECTIONS.forEach(s => s.questions.forEach(q => {
+  G.forEach(s => s.questions.forEach(q => {
     if(audit.answers[q.id] !== (q.inv ? "oui" : "non")) return;
     const photos = audit.photos[q.id] || [];
     const act = (audit.actions || {})[q.id] || {};
@@ -1756,7 +1864,7 @@ function buildReportHtml(audit){
   }));
   const logoHtml = logo ? `<img src="${esc(logo)}" style="max-height:70px; display:block; margin:0 auto 10px;">` : "";
   return `<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8">
-  <title>Audit ${esc(audit.restaurant)} — ${esc(audit.date)}</title>
+  <title>${estProprete(audit) ? "Audit propreté" : "Audit"} ${esc(audit.restaurant)} — ${esc(audit.date)}</title>
   <style>
     body{font-family:-apple-system,"Segoe UI",Roboto,Arial,sans-serif;color:#0f172a;max-width:760px;margin:24px auto;padding:0 16px;}
     h1{font-size:24px;margin:0 0 4px;} .sub{color:#64748b;font-size:14px;margin-bottom:20px;}
@@ -1773,8 +1881,8 @@ function buildReportHtml(audit){
     @media print{ body{margin:8mm auto;} }
   </style></head><body>
   ${logoHtml}
-  <h1>🧑‍🍳 Audit Cuisine — ${esc(audit.restaurant || "")}</h1>
-  <div class="sub">${esc(audit.date ? fmtDate(audit.date) : "")} · Auditeur : ${esc(audit.auditor || "—")} · ${gs.done}/${TOTAL_Q} questions traitées
+  <h1>${titre} — ${esc(audit.restaurant || "")}</h1>
+  <div class="sub">${esc(audit.date ? fmtDate(audit.date) : "")} · Auditeur : ${esc(audit.auditor || "—")} · ${gs.done}/${gs.total} questions traitées
   ${(audit.startedAt && audit.completedAt > audit.startedAt) ? ` · ⏱️ de ${new Date(audit.startedAt).toLocaleTimeString("fr-FR", { hour:"2-digit", minute:"2-digit" })} à ${new Date(audit.completedAt).toLocaleTimeString("fr-FR", { hour:"2-digit", minute:"2-digit" })}` : ""}</div>
   <div><span class="score">${gs.score === null ? "—" : Math.round(gs.score) + " %"}</span> &nbsp;<span class="ilabel">${termine ? ic.label : "Score provisoire"}</span></div>
   ${gs.veto ? `<p style="color:#b91c1c;font-weight:700;font-size:13px;">⚖️ ${esc(gs.veto)}${gs.scoreBrut !== null ? " — score brut : " + Math.round(gs.scoreBrut) + " %" : ""}</p>` : ""}
@@ -1789,14 +1897,14 @@ function buildReportHtml(audit){
     ${audit.signatures.auditeur ? `<div><div style="font-size:12px;color:#64748b;">Signature auditeur</div><img src="${esc(audit.signatures.auditeur)}" style="max-width:230px; border-bottom:1px solid #cbd5e1;"><div style="font-size:11px;color:#64748b;">${esc(texteSignature(etatsSig.auditeur))}</div></div>` : ""}
     ${audit.signatures.responsable ? `<div><div style="font-size:12px;color:#64748b;">Signature responsable</div><img src="${esc(audit.signatures.responsable)}" style="max-width:230px; border-bottom:1px solid #cbd5e1;"><div style="font-size:11px;color:#64748b;">${esc(texteSignature(etatsSig.responsable))}</div></div>` : ""}
   </div>` : ""}
-  <p class="legend">Score global = moyenne des ${SECTIONS.length} scores de section. Barème : 95–100 Excellent · 90–94 Très bien · 80–89 Conforme ·
+  <p class="legend">${estProprete(audit) ? "Score global = part des réponses conformes (audit propreté : chaque question compte autant)" : "Score global = moyenne des " + G.length + " scores de section"}. Barème : 95–100 Excellent · 90–94 Très bien · 80–89 Conforme ·
   70–79 À améliorer · 60–69 Insuffisant · &lt;60 Audit à refaire d'urgence.<br>Rapport généré le ${new Date().toLocaleString("fr-FR")}.</p>
   </body></html>`;
 }
 async function shareReport(){
   if(!current) return;
   const html = buildReportHtml(current);
-  const name = "audit-" + safeName(current.restaurant) + "-" + current.date + ".html";
+  const name = (estProprete(current) ? "audit-proprete-" : "audit-") + safeName(current.restaurant) + "-" + current.date + ".html";
   try{
     const file = new File([html], name, { type:"text/html" });
     if(navigator.canShare && navigator.canShare({ files:[file] })){
@@ -1865,6 +1973,16 @@ async function demanderAuRelais(quoi, url, options, delaiMax){
   }
   return data;
 }
+// Demande sa version au relais (le relais 4.4 et les suivants la donnent ; les plus anciens ne connaissent pas cette demande)
+async function verifierRelais(){
+  actionCloudManuelle();
+  const url = RELAIS_CLOUD + "?cle=" + encodeURIComponent(cleCloud()) + "&version=1&t=" + Date.now();   // jamais une réponse gardée en mémoire
+  const data = await enFileRelais(() => appelRelais("vérification du relais", url, { cache:"no-store" }, 60000));
+  if(typeof data.relais === "string"){ noterVersionRelais(data); return data.relais.slice(0, 20); }
+  if(data.erreur === "cle invalide") throw new Error("le relais refuse la clé enregistrée dans les réglages");
+  if(data.erreur){ try{ localStorage.setItem("audit:relaisVersion", "ancien"); }catch(e){} return "ancien"; }
+  throw new Error("réponse inattendue du relais");
+}
 async function cloudPost(cle, audit){
   if(!audit || audit._resume) throw new Error("Audit incomplet (sans photos) : envoi refusé");
   const corps = JSON.stringify({ cle, audit });   // l'état de l'audit est figé ici, au moment de l'appel
@@ -1904,7 +2022,7 @@ async function envoyerAudit(audit){
   e.enCours = true; e.dernierEssai = Date.now();
   clearTimeout(e.minuterie); e.minuterie = null;
   const id = audit.id, version = audit.updatedAt || 0;
-  const complet = globalStats(audit).done === TOTAL_Q;
+  const complet = estComplet(audit);
   try{
     const envoi = await cloudPost(cleCloud(), audit);
     e.echecs = 0; e.echecSignale = false;
@@ -1928,7 +2046,7 @@ function apresEnvoi(id){
 function programmerEnvoi(a){
   const e = etatEnvoi(a.id);
   if(e.enCours) return;                          // la suite sera décidée à la fin de l'envoi en cours
-  const complet = globalStats(a).done === TOTAL_Q;
+  const complet = estComplet(a);
   const intervalle = complet ? 60000 : 120000;   // au plus un envoi par minute (audit terminé) ou toutes les 2 min (audit en cours)
   let attente;
   if(e.echecs){                                  // après un échec : essais de plus en plus espacés
@@ -1959,7 +2077,7 @@ async function envoiAuto(id){
     const r = await envoyerAudit(audit);
     if(r.complet) toast("☁️ Audit complet sauvegardé dans votre Drive");
   }catch(err){
-    if(!e.echecSignale && globalStats(audit).done === TOTAL_Q){
+    if(!e.echecSignale && estComplet(audit)){
       e.echecSignale = true;
       toast("⚠️ Sauvegarde en ligne impossible pour l'instant — nouvel essai automatique plus tard");
     }
@@ -1984,7 +2102,7 @@ async function rattrapageEnLigne(){
   rattrapageEnCours = true;
   const debut = Date.now();
   try{
-    const aFaire = cache.filter((a) => a._resume && globalStats(a).done === TOTAL_Q && !enLigneAJour(a)).slice(0, 3);
+    const aFaire = cache.filter((a) => a._resume && estComplet(a) && !enLigneAJour(a)).slice(0, 3);
     for(const r of aFaire){
       if(derniereActionCloud > debut) break;       // une action de l'utilisateur est arrivée entre-temps : on s'arrête là
       const e = etatEnvoi(r.id);
@@ -2014,16 +2132,23 @@ async function cloudCharger(id){
 function renderSuivi(){
   if(!state.suiviResto){ const r = restosUniques(); state.suiviResto = r[0] || null; }
   const tab = state.suiviTab;
+  // audits classiques et audits propreté sont suivis séparément : leurs scores ne portent pas sur les mêmes questions
+  const avecProprete = cache.some(estProprete);
+  const typeSuivi = (avecProprete && state.suiviType === "proprete") ? "proprete" : "classique";
+  const lesAudits = cache.filter((a) => estProprete(a) === (typeSuivi === "proprete"));
+  const chipsType = avecProprete ? `<div class="navrow">
+    <button class="navchip ${typeSuivi === "classique" ? "active" : ""}" data-action="suivi-type" data-v="classique">📋 Audits classiques</button>
+    <button class="navchip ${typeSuivi === "proprete" ? "active" : ""}" data-action="suivi-type" data-v="proprete">🧽 Audits propreté</button></div>` : "";
   let corps = "";
   const chipsRestos = restosUniques().map((r) =>
     `<button class="chip ${r === state.suiviResto ? "active" : ""}" data-action="suivi-resto" data-r="${esc(r)}">${esc(r)}</button>`).join("");
 
   if(tab === "evolution"){
-    const tous = cache.filter((a) => (a.restaurant || "").trim() === state.suiviResto).sort(parDate);
+    const tous = lesAudits.filter((a) => (a.restaurant || "").trim() === state.suiviResto).sort(parDate);
     const audits = tous.filter(auditTermine);   // seuls les audits terminés comptent dans les courbes
     const enCours = tous.length - audits.length;
     if(!tous.length){
-      corps = `<div class="navrow">${chipsRestos}</div><div class="card"><div class="empty">Aucun audit pour ce restaurant.</div></div>`;
+      corps = `<div class="navrow">${chipsRestos}</div><div class="card"><div class="empty">Aucun audit${typeSuivi === "proprete" ? " propreté" : ""} pour ce restaurant.</div></div>`;
     } else {
       const serie = audits.map((a) => { const g = globalStats(a);
         return { label:dateCourt(a.date), val:g.score === null ? null : Math.round(g.score * 10) / 10 }; });
@@ -2032,8 +2157,11 @@ function renderSuivi(){
       let delta = "";
       if(audits.length >= 2){
         const anc = audits[audits.length - 2], rec = audits[audits.length - 1];
-        const rows = SECTIONS.map((s) => {
-          const s1 = sectionStats(s, anc).score, s2 = sectionStats(s, rec).score;
+        const gAnc = grilleDe(anc);
+        const rows = grilleDe(rec).map((s) => {
+          const sAnc = gAnc.find((x) => x.idx === s.idx);   // la même section dans l'audit précédent
+          if(!sAnc) return "";
+          const s1 = sectionStats(sAnc, anc).score, s2 = sectionStats(s, rec).score;
           if(s1 === null || s2 === null) return "";
           const d = s2 - s1;
           return `<div class="pl-item"><span style="flex:1;">${s.icon} ${esc(s.short)}</span>
@@ -2043,7 +2171,7 @@ function renderSuivi(){
         delta = `<div class="card"><h3>Évolution par section</h3><p class="meta" style="margin:0 2px 8px;">${esc(fmtDate(anc.date))} → ${esc(fmtDate(rec.date))}</p>${rows}</div>`;
       }
       const liste = tous.map((a) => { const g = globalStats(a); const ic2 = interp(g.score); const fini = auditTermine(a);
-        return `<div class="pl-item"><span style="flex:1;">${esc(fmtDate(a.date))}${a.suiviDe ? " 🔁" : ""}</span><span class="meta">${g.done}/${TOTAL_Q} répondues</span>
+        return `<div class="pl-item"><span style="flex:1;">${esc(fmtDate(a.date))}${a.suiviDe ? " 🔁" : ""}</span><span class="meta">${g.done}/${g.total} répondues</span>
           <span class="scorechip" style="background:${fini ? ic2.color : "#94a3b8"};">${!fini ? "en cours" : (g.score === null ? "—" : Math.round(g.score) + "%")}</span></div>`; }).join("");
       corps = `<div class="navrow">${chipsRestos}</div>` + courbe + delta +
         `<div class="card"><h3>${tous.length} audit(s) — ${esc(state.suiviResto || "")}</h3>${liste}</div>`;
@@ -2053,14 +2181,14 @@ function renderSuivi(){
     const restos = restosUniques();
     // dernier audit terminé de chaque restaurant, d'après la date de l'audit (et non la date de dernière modification)
     const dernierScore = (r) => {
-      const list = cache.filter((a) => (a.restaurant || "").trim() === r && auditTermine(a)).sort(parDate);
+      const list = lesAudits.filter((a) => (a.restaurant || "").trim() === r && auditTermine(a)).sort(parDate);
       return list.length ? globalStats(list[list.length - 1]).score : null;
     };
     const barres = restos.map((r) => ({ label:r, val:dernierScore(r) === null ? null : Math.round(dernierScore(r)) }))
       .sort((a, b) => (b.val === null ? -1 : b.val) - (a.val === null ? -1 : a.val));
     corps = `<div class="card"><h3>Dernier score par restaurant</h3>${svgBarresH(barres, (v) => Math.round(v) + " %")}</div>
       <div class="card">${restos.map((r) => {
-        const audits = cache.filter((a) => (a.restaurant || "").trim() === r);
+        const audits = lesAudits.filter((a) => (a.restaurant || "").trim() === r);
         const sc = dernierScore(r);
         const ic2 = interp(sc);
         return `<div class="pl-item" data-action="suivi-resto" data-r="${esc(r)}" style="cursor:pointer;">
@@ -2070,14 +2198,14 @@ function renderSuivi(){
   }
   else if(tab === "groupe"){
     const moisMap = {};
-    cache.forEach((a) => { const k = (a.date || "").slice(0, 7); if(k) moisMap[k] = true; });
+    lesAudits.forEach((a) => { const k = (a.date || "").slice(0, 7); if(k) moisMap[k] = true; });
     const mois = Object.keys(moisMap).sort().reverse();
     if(!state.grpMois || !mois.includes(state.grpMois)) state.grpMois = mois[0] || null;
     const chipsMois = mois.map((k) => {
       const d = new Date(k + "-01T12:00:00");
       return `<button class="chip ${k === state.grpMois ? "active" : ""}" data-action="grp-mois" data-k="${esc(k)}">${esc(d.toLocaleDateString("fr-FR", { month:"long", year:"numeric" }))}</button>`;
     }).join("");
-    const duMois = cache.filter((a) => (a.date || "").slice(0, 7) === state.grpMois);
+    const duMois = lesAudits.filter((a) => (a.date || "").slice(0, 7) === state.grpMois);
     const audits = duMois.filter(auditTermine);   // seuls les audits terminés comptent
     const enCours = duMois.length - audits.length;
     const scores = audits.map((a) => globalStats(a).score).filter((s) => s !== null);
@@ -2089,7 +2217,7 @@ function renderSuivi(){
       return { label:r, val:g.score === null ? null : Math.round(g.score) };
     }).sort((a, b) => (b.val === null ? -1 : b.val) - (a.val === null ? -1 : a.val));
     const faib = {};
-    audits.forEach((a) => SECTIONS.forEach((s) => {
+    audits.forEach((a) => grilleDe(a).forEach((s) => {
       const st = sectionStats(s, a);
       if(st.non > 0) faib[s.short] = (faib[s.short] || 0) + st.non;
     }));
@@ -2111,7 +2239,7 @@ function renderSuivi(){
     <button class="chip ${tab === "comparaison" ? "active" : ""}" data-action="suivi-tab" data-t="comparaison">🏆 Comparaison</button>
     <button class="chip ${tab === "groupe" ? "active" : ""}" data-action="suivi-tab" data-t="groupe">👥 Groupe</button>
   </div>
-  <div class="wrap">${corps}</div>`;
+  <div class="wrap">${chipsType}${corps}</div>`;
   ajusterBarres();
   window.scrollTo(0, 0);
 }
@@ -2146,6 +2274,44 @@ function renderGrille(){
   </div>`;
   ajusterBarres();
   window.scrollTo(0, 0);
+}
+
+/* ---------- Questions posées dans un audit propreté ---------- */
+function enregistrerProprete(garde){
+  const r = reglages();
+  r.proprete = idsDansLaGrille(garde);
+  saveReglages(r);
+}
+function renderProprete(garder){   // garder = true : mise à jour sur place, sans remonter en haut
+  const yAvant = window.scrollY;
+  const garde = new Set(questionsProprete());
+  const n = idsProprete().length;
+  const blocs = SECTIONS.map((s, i) => {
+    const nbSec = s.questions.filter((q) => garde.has(q.id)).length;
+    const toutes = nbSec === s.questions.length;
+    return `<div class="card">
+      <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
+        <h3 style="flex:1; margin:0;">${s.icon} ${esc(s.short)} <span class="meta">${nbSec}/${s.questions.length}</span></h3>
+        <button class="navchip" data-action="prop-sec" data-i="${i}" data-v="${toutes ? "0" : "1"}">${toutes ? "Aucune" : "Toutes"}</button>
+      </div>
+      ${s.questions.map((q) => `<label class="propq"><input type="checkbox" data-propq="${esc(q.id)}" ${garde.has(q.id) ? "checked" : ""}><span>${esc(q.t)}</span></label>`).join("")}
+    </div>`;
+  }).join("");
+  app.innerHTML = `
+  <div class="topbar noprint"><div class="tb-in">
+    <button class="tb-back" data-action="nav" data-v="list">←</button>
+    <div class="tb-title"><b>🧽 Audit propreté</b><small>${n} question${n > 1 ? "s" : ""} retenue${n > 1 ? "s" : ""} sur ${TOTAL_Q}</small></div>
+  </div></div>
+  <div class="wrap">
+    <div class="card">
+      <p class="meta" style="margin:0;">Cochez les questions posées dans un audit propreté. Ce choix vaut pour les prochains audits propreté : ceux déjà créés gardent leurs questions, et leurs scores ne changent pas.</p>
+      ${n ? "" : `<p class="meta" style="color:var(--bad); font-weight:700; margin:8px 0 0;">Aucune question cochée : impossible de créer un audit propreté.</p>`}
+      <button class="btn ghost block" data-action="prop-defaut" style="margin-top:10px;">↺ Revenir à la sélection d'origine</button>
+    </div>
+    ${blocs}
+  </div>`;
+  ajusterBarres();
+  window.scrollTo(0, garder ? yAvant : 0);
 }
 
 let annCv = null, annCtx = null, annBase = null, annOutil = "stylo", annTraits = [], annTrace = null;
@@ -2357,7 +2523,7 @@ async function cloudToutSynchro(surEtape){
         if(vDrive === vLoc && nbPhotos(audit) <= photosLoc){ vues[e.id] = e.maj; verifies[e.id] = repereDrive(e); continue; }   // même version, relue avec succès : rien à changer ici
       }
       audit.cloudVersion = audit.updatedAt; audit.cloudOk = Date.now(); audit.cloudDernier = audit.cloudOk;
-      audit.cloudComplet = globalStats(audit).done === TOTAL_Q;
+      audit.cloudComplet = estComplet(audit);
       delete audit.cloudDebut; delete audit.cloudTaille;
       if(await dbPut(audit)){ oublierSuppression(e.id); vues[e.id] = e.maj; verifies[e.id] = repereDrive(e); importes++; }
     }
@@ -2421,7 +2587,7 @@ async function cloudRestaurer(){
     showModal(`<h3>☁️ Sauvegardes dans votre Drive</h3>
       ${liste.map((a) => `
         <div class="pl-item"><span style="flex:1; min-width:0;"><b style="font-size:13.5px;">${esc(a.restaurant || "?")}</b>
-        <span class="meta" style="display:block;">${esc(a.date || "?")} · ${Math.round((a.taille || 0) / 1024)} Ko</span></span>
+        <span class="meta" style="display:block;">${esc(a.date || "?")}${a.type === "proprete" ? " · 🧽 propreté" : ""} · ${Math.round((a.taille || 0) / 1024)} Ko</span></span>
         <button class="btn ghost" data-action="cloud-import" data-id="${esc(a.id)}" data-maj="${esc(repereDrive(a))}" style="min-height:38px; padding:8px 12px;">Importer</button></div>`).join("")}
       <button class="btn primary block" data-action="close-modal" style="margin-top:10px;">Fermer</button>`);
   }catch(e){ afficherProbleme("Liste du Drive indisponible", e.message, []); }
@@ -2442,6 +2608,11 @@ document.body.addEventListener("click", async (e) => {
     const rec = { id:newId(), restaurant:rest, auditor:document.getElementById("fAud").value.trim(),
       date:document.getElementById("fDate").value || todayISO(),
       createdAt:Date.now(), updatedAt:Date.now(), answers:{}, notes:{}, photos:{}, actions:{} };
+    if(state.typeChoisi === "proprete"){
+      const ids = idsProprete();
+      if(!ids.length){ toast("Aucune question de propreté choisie : voir ⚙️ Réglages"); return; }
+      rec.type = "proprete"; rec.perimetre = ids;   // ses questions sont fixées dès maintenant
+    }
     cache.push(rec);
     dbPut(rec).catch(console.error);
     closeModal();
@@ -2449,7 +2620,26 @@ document.body.addEventListener("click", async (e) => {
     render();
   }
   else if(act === "close-modal") closeModal();
+  else if(act === "choix-type"){
+    state.typeChoisi = el.dataset.v === "proprete" ? "proprete" : "classique";
+    el.parentNode.querySelectorAll(".typebtn").forEach((b) => b.classList.toggle("sel", b.dataset.v === state.typeChoisi));
+  }
   else if(act === "save-info"){
+    // changement de type : les réponses sont toutes gardées ; celles hors propreté ne comptent simplement plus
+    const voulu = state.typeChoisi === "proprete";
+    if(voulu !== estProprete(current)){
+      if(voulu){
+        const ids = idsProprete();
+        if(!ids.length){ toast("Aucune question de propreté choisie : voir ⚙️ Réglages"); return; }
+        const garde = new Set(ids);
+        const hors = Object.keys(current.answers).filter((k) => !garde.has(k)).length;
+        if(hors && !confirm("Passer en audit propreté ?\n\n" + hors + " réponse(s) hors propreté seront gardées mais ne compteront plus (elles reviendront si vous repassez en audit classique).")) return;
+        current.type = "proprete"; current.perimetre = ids;
+      } else {
+        delete current.type; delete current.perimetre;
+      }
+      state.sec = 0; state.fq = 0;
+    }
     current.restaurant = document.getElementById("fRest").value.trim() || current.restaurant;
     current.auditor = document.getElementById("fAud").value.trim();
     current.date = document.getElementById("fDate").value || current.date;
@@ -2466,7 +2656,7 @@ document.body.addEventListener("click", async (e) => {
     current = rec;
     if(act === "open-report"){ state.view = "report"; render(); return; }
     state.view = "audit"; state.autoJump = true;
-    state.sec = SECTIONS.findIndex(s => sectionStats(s, rec).done < s.questions.length);
+    state.sec = grilleDe(rec).findIndex(s => sectionStats(s, rec).done < s.questions.length);
     if(state.sec < 0) state.sec = 0;
     render();
   }
@@ -2475,8 +2665,12 @@ document.body.addEventListener("click", async (e) => {
     if(!src) return;
     const rec = { id:newId(), restaurant:src.restaurant, auditor:src.auditor, date:todayISO(),
       createdAt:Date.now(), updatedAt:Date.now(), answers:{}, notes:{}, photos:{}, actions:{} };
+    if(estProprete(src)){   // même type ; les questions sont celles choisies aujourd'hui pour la propreté
+      const ids = idsProprete();
+      rec.type = "proprete"; rec.perimetre = ids.length ? ids : (src.perimetre || []).slice();
+    }
     cache.push(rec);
-    dbPut(rec).then(() => { toast("Audit vierge créé (même restaurant)"); renderList(); }).catch(console.error);
+    dbPut(rec).then(() => { toast(estProprete(rec) ? "Audit propreté vierge créé (même restaurant)" : "Audit vierge créé (même restaurant)"); renderList(); }).catch(console.error);
   }
   else if(act === "del-audit"){
     const rec = cache.find(a => a.id === el.dataset.id);
@@ -2534,7 +2728,8 @@ document.body.addEventListener("click", async (e) => {
     if(current.answers[qid] === v) delete current.answers[qid];
     else current.answers[qid] = v;
     card.querySelectorAll(".seg .b").forEach(b => b.classList.toggle("sel", b.dataset.v === current.answers[qid]));
-    const qCourante = SECTIONS[state.sec].questions.find((x) => x.id === qid);
+    const G = grilleDe(current);
+    const qCourante = G[state.sec] && G[state.sec].questions.find((x) => x.id === qid);
     const nonConforme = current.answers[qid] === (qCourante && qCourante.inv ? "oui" : "non");
     const note = card.querySelector(".note");
     const noterow = card.querySelector(".noterow");
@@ -2549,15 +2744,15 @@ document.body.addEventListener("click", async (e) => {
     }
     scheduleSave(); updateLive();
     if(reglages().focus && current){
-      const q = SECTIONS[state.sec].questions.find((x) => x.id === qid);
+      const q = G[state.sec] && G[state.sec].questions.find((x) => x.id === qid);
       const conforme = v === "na" || (q && q.inv ? v === "non" : v === "oui");
       if(conforme){
-        const qs = SECTIONS[state.sec].questions;
+        const qs = G[state.sec] ? G[state.sec].questions : [];
         let n = state.fq + 1;
         while(n < qs.length && current.answers[qs[n].id]) n++;
         if(n < qs.length){ state.fq = n; }
         else {
-          const ns = SECTIONS.findIndex((s, i) => i > state.sec && sectionStats(s, current).done < s.questions.length);
+          const ns = G.findIndex((s, i) => i > state.sec && sectionStats(s, current).done < s.questions.length);
           if(ns >= 0) state.sec = ns;
           state.fq = 0;
         }
@@ -2579,7 +2774,8 @@ document.body.addEventListener("click", async (e) => {
     current.photos[qid].splice(i, 1);
     if(!current.photos[qid].length) delete current.photos[qid];
     scheduleSave();
-    const qSup = SECTIONS[state.sec] && SECTIONS[state.sec].questions.find((x) => x.id === qid);
+    const secP = grilleDe(current)[state.sec];
+    const qSup = secP && secP.questions.find((x) => x.id === qid);
     if(qSup && qSup.crit && current.answers[qid] === (qSup.inv ? "oui" : "non")){ renderAudit(true); return; }
     renderPhotoRow(qid);
   }
@@ -2611,7 +2807,7 @@ document.body.addEventListener("click", async (e) => {
         const local = cache.find((a) => a.id === audit.id);
         if(remplacementRisque(local, audit) && !confirm("La version de cet appareil est plus récente, ou contient plus de photos, que celle du Drive.\n\nLa remplacer quand même par celle du Drive ?")) return;
         audit.cloudVersion = audit.updatedAt; audit.cloudOk = Date.now(); audit.cloudDernier = audit.cloudOk;
-        audit.cloudComplet = globalStats(audit).done === TOTAL_Q;
+        audit.cloudComplet = estComplet(audit);
         delete audit.cloudDebut; delete audit.cloudTaille;
         if(!(await dbPut(audit))) throw new Error("enregistrement impossible sur l'appareil");
         oublierSuppression(audit.id);
@@ -2665,7 +2861,7 @@ document.body.addEventListener("click", async (e) => {
     const src = cache.find((a) => a.id === el.dataset.id);
     if(!src) return;
     const rappels = {};
-    SECTIONS.forEach((s) => s.questions.forEach((q) => {
+    grilleDe(src).forEach((s) => s.questions.forEach((q) => {
       if(src.answers[q.id] === (q.inv ? "oui" : "non")){
         rappels[q.id] = { date:src.date, note:(src.notes[q.id] || "") };
       }
@@ -2673,6 +2869,10 @@ document.body.addEventListener("click", async (e) => {
     const rec = { id:newId(), restaurant:src.restaurant, auditor:src.auditor, date:todayISO(),
       createdAt:Date.now(), updatedAt:Date.now(), answers:{}, notes:{}, photos:{}, actions:{},
       suiviDe:src.id, rappels };
+    if(estProprete(src)){   // une contre-visite reprend exactement les questions de l'audit d'origine
+      rec.type = "proprete";
+      rec.perimetre = (Array.isArray(src.perimetre) && src.perimetre.length) ? src.perimetre.slice() : idsProprete();
+    }
     cache.push(rec);
     dbPut(rec).then(() => {
       toast("Contre-visite créée — anciens Non rappelés 🔁");
@@ -2723,7 +2923,8 @@ document.body.addEventListener("click", async (e) => {
   else if(act === "settings") modalReglages();
   else if(act === "nav"){ closeModal(); state.view = el.dataset.v; render(); }
   else if(act === "toutoui"){
-    const sec = SECTIONS[state.sec];
+    const sec = grilleDe(current)[state.sec];
+    if(!sec) return;
     const nbRepondu = sec.questions.filter((q) => current.answers[q.id]).length;
     if(nbRepondu > 0 && !confirm("Pré-cocher TOUTES les questions de la section en « Oui » ? (" + nbRepondu + " réponse(s) déjà saisies seront remplacées)")) return;
     sec.questions.forEach((q) => { current.answers[q.id] = q.inv ? "non" : "oui"; });
@@ -2760,7 +2961,9 @@ document.body.addEventListener("click", async (e) => {
     try{ rec.start(); }catch(e){ el.classList.remove("ecoute"); toast("Dictée indisponible"); }
   }
   else if(act === "fq"){
-    state.fq = Math.max(0, Math.min(SECTIONS[state.sec].questions.length - 1, state.fq + parseInt(el.dataset.d, 10)));
+    const secF = current && grilleDe(current)[state.sec];
+    if(!secF) return;
+    state.fq = Math.max(0, Math.min(secF.questions.length - 1, state.fq + parseInt(el.dataset.d, 10)));
     renderAudit();
   }
   else if(act === "reessayer"){
@@ -2774,6 +2977,34 @@ document.body.addEventListener("click", async (e) => {
     toast("Règle critique : " + el.textContent);
   }
   else if(act === "suivi-tab"){ state.suiviTab = el.dataset.t; renderSuivi(); }
+  else if(act === "suivi-type"){ state.suiviType = el.dataset.v; renderSuivi(); }
+  else if(act === "prop-sec"){
+    const s = SECTIONS[parseInt(el.dataset.i, 10)];
+    if(!s) return;
+    const garde = new Set(questionsProprete());
+    s.questions.forEach((q) => { if(el.dataset.v === "1") garde.add(q.id); else garde.delete(q.id); });
+    enregistrerProprete(garde);
+    renderProprete(true);
+  }
+  else if(act === "prop-defaut"){
+    const r = reglages();
+    delete r.proprete;
+    saveReglages(r);
+    renderProprete(true);
+    toast("Sélection d'origine rétablie ✓");
+  }
+  else if(act === "verifier-relais"){
+    el.disabled = true; el.textContent = "Vérification en cours…";
+    verifierRelais()
+      .then((v) => {
+        if(document.body.contains(el)) modalReglages();
+        toast(v === "ancien" ? "⚠️ C'est encore l'ancienne version du relais qui répond" : "✓ Relais en service : version " + v, 6000);
+      })
+      .catch((err) => {
+        if(document.body.contains(el)) modalReglages();
+        toast("Vérification impossible : " + err.message, 6000);
+      });
+  }
   else if(act === "suivi-resto"){ state.suiviResto = el.dataset.r; state.suiviTab = "evolution"; renderSuivi(); }
   else if(act === "grp-mois"){ state.grpMois = el.dataset.k; renderSuivi(); }
   else if(act === "grille-sec"){ state.grilleSec = parseInt(el.dataset.i, 10); renderGrille(); }
@@ -2821,6 +3052,12 @@ document.body.addEventListener("change", (e) => {
       toast("Logo enregistré ✓");
     };
     img.src = url;
+  }
+  else if(t.dataset && t.dataset.propq){
+    const garde = new Set(questionsProprete());
+    if(t.checked) garde.add(t.dataset.propq); else garde.delete(t.dataset.propq);
+    enregistrerProprete(garde);
+    renderProprete(true);
   }
   else if(t.id === "fFocus"){
     const r = reglages();
@@ -2995,7 +3232,9 @@ app.addEventListener("touchend", (e) => {
   tX = null;
   if(state.view !== "audit" || !reglages().focus) return;
   if(Math.abs(dx) < 60) return;
-  const qs = SECTIONS[state.sec].questions;
+  const secT = current && grilleDe(current)[state.sec];
+  if(!secT) return;
+  const qs = secT.questions;
   state.fq = Math.max(0, Math.min(qs.length - 1, state.fq + (dx < 0 ? 1 : -1)));
   renderAudit();
 }, { passive:true });
