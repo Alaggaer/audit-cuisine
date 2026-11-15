@@ -1274,6 +1274,13 @@ function renderList(){
       <p>${cache.length} audit${cache.length > 1 ? "s" : ""} enregistré${cache.length > 1 ? "s" : ""} sur cet appareil · ${TOTAL_Q} questions réparties en ${SECTIONS.length} sections</p>
     </div>
     <button class="btn primary block" data-action="new-audit">＋&nbsp; Nouvel audit</button>`;
+  if(etatCode() === "refuse"){
+    html += `<div class="card" style="border:2px solid var(--warn); background:#fffbeb;">
+      <b>☁️ Sauvegarde en ligne en pause</b>
+      <p class="meta">Le code d'équipe de cet appareil n'est plus accepté. Vos audits restent enregistrés sur l'appareil ; ils partiront en ligne dès que le code sera saisi.</p>
+      <button class="btn primary block" data-action="settings" style="margin-top:8px;">⚙️ Saisir le code d'équipe</button>
+    </div>`;
+  }
   if(stockageHS){
     html += `<div class="card" style="border:2px solid var(--warn); background:#fffbeb;">
       <b>⚠️ Mode mémoire temporaire</b>
@@ -1813,8 +1820,12 @@ function modalReglages(){
     </div>
     <p class="meta" style="margin:6px 0 0;">Appliqué au score global dès qu'une non-conformité critique HACCP est relevée.</p>
     <h3 style="margin:18px 0 10px;">☁️ Sauvegarde en ligne</h3>
-    <div class="field"><label>Clé du relais</label>
-      <input id="fCleCloud" type="text" value="${esc(r.cle || CLE_CLOUD_DEFAUT)}" placeholder="••••••••" autocomplete="off"></div>
+    <div class="field"><label>Code d'équipe</label>
+      <div style="display:flex; align-items:center; gap:10px;">
+        <span class="meta" id="etatCode" style="flex:1;">${texteEtatCode()}</span>
+        <button class="btn ghost" data-action="code-modifier" style="width:auto; flex:none; margin:0; min-height:36px; padding:6px 12px;">Modifier</button>
+      </div>
+      <input id="fCleCloud" class="hide" type="text" placeholder="Code d'équipe (ex. abcd-efgh-jkmn)" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" style="margin-top:8px;"></div>
     <div class="setrow"><input id="fAutoCloud" type="checkbox" ${r.autoCloud !== false ? "checked" : ""}>
       <label for="fAutoCloud" style="margin:0;">Sauvegarder en ligne automatiquement (pendant l'audit, puis à la fin)</label></div>
     <button class="btn ghost block" data-action="cloud-restore">☁️ Restaurer depuis le Drive</button>
@@ -2049,6 +2060,8 @@ async function appelRelais(quoi, url, options, delaiMax){
 async function demanderAuRelais(quoi, url, options, delaiMax){
   const data = await enFileRelais(() => appelRelais(quoi, url, options, delaiMax));
   noterVersionRelais(data);
+  if(data.erreur === "cle invalide") signalerCodeRefuse();
+  else if(etatCode() === "refuse") noterEtatCode("");   // le relais accepte de nouveau le code de cet appareil
   if(data.erreur){
     const detail = typeof data.erreur === "string" ? data.erreur : JSON.stringify(data.erreur);
     const message = "Le relais a refusé (" + quoi + ") : " + String(detail).slice(0, 300);
@@ -2063,7 +2076,7 @@ async function verifierRelais(){
   const url = RELAIS_CLOUD + "?cle=" + encodeURIComponent(cleCloud()) + "&version=1&t=" + Date.now();   // jamais une réponse gardée en mémoire
   const data = await enFileRelais(() => appelRelais("vérification du relais", url, { cache:"no-store" }, 60000));
   if(typeof data.relais === "string"){ noterVersionRelais(data); return data.relais.slice(0, 20); }
-  if(data.erreur === "cle invalide") throw new Error("le relais refuse la clé enregistrée dans les réglages");
+  if(data.erreur === "cle invalide"){ signalerCodeRefuse(); throw new Error("le relais refuse le code d'équipe de cet appareil"); }
   if(data.erreur){ try{ localStorage.setItem("audit:relaisVersion", "ancien"); }catch(e){} return "ancien"; }
   throw new Error("réponse inattendue du relais");
 }
@@ -2080,6 +2093,46 @@ async function cloudPost(cle, audit){
 const envois = {};   // id → { enCours, minuterie, dernierEssai, echecs, echecReseau, echecSignale } (état de la session, non enregistré)
 function etatEnvoi(id){ return envois[id] || (envois[id] = {}); }
 function cleCloud(){ return reglages().cle || CLE_CLOUD_DEFAUT; }
+/* ---- Code d'équipe (relais 4.6 et suivants) ----
+   Le code n'est jamais écrit dans l'app publiée. À chaque ouverture, l'app demande au relais le code en vigueur,
+   en présentant celui qu'elle a : l'ancienne clé pendant la période de transition, puis le code lui-même.
+   Le relais répond le code d'équipe, gardé sur l'appareil : l'auditeur ne voit rien.
+   Si le relais refuse (transition terminée, code changé), l'accueil invite à saisir le code dans Réglages. ---- */
+function etatCode(){ try{ return localStorage.getItem("audit:etatCode") || ""; }catch(e){ return ""; } }   // "ok", "refuse" ou ""
+function noterEtatCode(v){ try{ localStorage.setItem("audit:etatCode", v); }catch(e){} }
+function signalerCodeRefuse(){
+  const avant = etatCode();
+  noterEtatCode("refuse");
+  if(avant !== "refuse" && demarre && state.view === "list") renderList();   // le bandeau apparaît sur l'accueil
+}
+let majCodeEnCours = null;
+// "ok" (code d'équipe reçu), "refuse" (code de l'appareil refusé) ou "" (relais plus ancien : rien à faire pour l'instant)
+function majCodeEquipe(){
+  if(majCodeEnCours) return majCodeEnCours;
+  majCodeEnCours = (async () => {
+    const url = RELAIS_CLOUD + "?cle=" + encodeURIComponent(cleCloud()) + "&echange=1&t=" + Date.now();
+    const data = await enFileRelais(() => appelRelais("code d'équipe", url, { cache:"no-store" }, 60000));
+    noterVersionRelais(data);
+    if(typeof data.cleEquipe === "string" && data.cleEquipe.trim()){
+      const avant = etatCode();
+      const r = reglages();
+      r.cle = data.cleEquipe.trim();
+      saveReglages(r);
+      noterEtatCode("ok");
+      if(avant === "refuse" && state.view === "list") renderList();   // le bandeau disparaît
+      return "ok";
+    }
+    if(data.erreur === "cle invalide"){ signalerCodeRefuse(); return "refuse"; }
+    return "";
+  })().finally(() => { majCodeEnCours = null; });
+  return majCodeEnCours;
+}
+function texteEtatCode(){
+  const e = etatCode();
+  if(e === "refuse") return `<span style="color:var(--bad); font-weight:700;">⚠️ Code refusé par le relais : saisissez le code d'équipe</span>`;
+  if(e === "ok") return "✓ Code d'équipe enregistré sur cet appareil";
+  return cleCloud() === CLE_CLOUD_DEFAUT ? "Ancien code : le passage au code d'équipe se fera tout seul" : "Code enregistré (pas encore vérifié)";
+}
 function enLigneAJour(a){
   if(!a) return false;
   if(a.cloudVersion) return a.cloudVersion >= (a.updatedAt || 0);
@@ -2204,7 +2257,7 @@ async function rattrapageEnLigne(){
 }
 // Liste du Drive, et audits « supprimés partout » (relais 4.5 et suivants) : id → { version }
 async function cloudListerTout(){
-  const cle = reglages().cle || CLE_CLOUD_DEFAUT;
+  const cle = cleCloud();
   const data = await demanderAuRelais("liste des sauvegardes", RELAIS_CLOUD + "?cle=" + encodeURIComponent(cle) + "&sauvegardes=1", {}, 90000);
   return { audits:Array.isArray(data.audits) ? data.audits : [], supprimes:estObjet(data.supprimes) ? data.supprimes : {} };
 }
@@ -2233,7 +2286,7 @@ async function rattraperSuppressions(){
   }
 }
 async function cloudCharger(id){
-  const cle = reglages().cle || CLE_CLOUD_DEFAUT;
+  const cle = cleCloud();
   const data = await demanderAuRelais("lecture d'un audit", RELAIS_CLOUD + "?cle=" + encodeURIComponent(cle) + "&charger=" + encodeURIComponent(id), {}, 240000);
   return data.audit;
 }
@@ -2539,6 +2592,7 @@ async function cloudToutSynchro(surEtape){
   const etape = (t) => { try{ if(surEtape) surEtape(t); }catch(e){} };
   actionCloudManuelle();
   await sauverMaintenant();
+  try{ await majCodeEquipe(); }catch(e){ if(e.reseau) throw e; }   // code d'équipe en vigueur, avant tout le reste
   if(Object.keys(suppressionsEnAttente()).length){ etape("Suppressions en attente…"); await rattraperSuppressions(); }
   etape("Lecture de la liste du Drive…");
   const lu = await cloudListerTout();
@@ -3106,6 +3160,10 @@ document.body.addEventListener("click", async (e) => {
     if(cible) openViewer(cible.qid, cible.i);
   }
   else if(act === "settings") modalReglages();
+  else if(act === "code-modifier"){
+    const saisie = document.getElementById("fCleCloud");
+    if(saisie){ saisie.classList.remove("hide"); saisie.focus(); }
+  }
   else if(act === "nav"){ closeModal(); state.view = el.dataset.v; render(); }
   else if(act === "toutoui"){
     const sec = grilleDe(current)[state.sec];
@@ -3291,10 +3349,29 @@ document.body.addEventListener("change", (e) => {
     appliquerMesure(t.dataset.qid);
   }
   else if(t.id === "fCleCloud"){
+    const code = t.value.trim();
+    if(!code) return;
     const r = reglages();
-    r.cle = t.value.trim();
+    const ancien = r.cle;
+    r.cle = code;
     saveReglages(r);
-    toast(r.cle ? "Clé enregistrée ✓" : "Clé effacée");
+    noterEtatCode("");
+    toast("Vérification du code…");
+    const rafraichirReglages = () => { if(document.getElementById("etatCode")) modalReglages(); };
+    // la fenêtre des réglages est redessinée AVANT le message : l'ouvrir efface le message affiché
+    majCodeEquipe()
+      .then(async (res) => {
+        if(res === "refuse"){
+          // code mal tapé : on reprend le code précédent (peut-être encore valable) et on revérifie
+          const r2 = reglages(); r2.cle = ancien || CLE_CLOUD_DEFAUT; saveReglages(r2);
+          try{ await majCodeEquipe(); }catch(e){}
+        }
+        rafraichirReglages();
+        if(res === "ok") toast("✓ Code d'équipe accepté", 4000);
+        else if(res === "refuse") toast("Code refusé par le relais — vérifiez-le", 6000);
+        else toast("Code enregistré (le relais en service ne gère pas encore le code d'équipe)", 6000);
+      })
+      .catch(() => { rafraichirReglages(); toast("Pas de réseau : le code sera vérifié à la prochaine connexion", 6000); });
   }
   else if(t.id === "fAutoCloud"){
     const r = reglages();
@@ -3428,6 +3505,7 @@ function afficherPreparation(fait, total){
     if(!reglages().cle){ const r = reglages(); r.cle = CLE_CLOUD_DEFAUT; saveReglages(r); }
     renderList();
     demarre = true;
+    setTimeout(() => { majCodeEquipe().catch(() => {}); }, 3000);   // passage silencieux au code d'équipe
     setTimeout(() => { rattrapageEnLigne().catch(console.error); }, 15000);
   }catch(e){
     const el = document.getElementById("app");
@@ -3440,7 +3518,10 @@ function afficherPreparation(fait, total){
 document.addEventListener("visibilitychange", () => { if(document.visibilityState === "hidden") sauverMaintenant(); });
 window.addEventListener("pagehide", () => { sauverMaintenant(); });
 // Le réseau revient : on renvoie les audits terminés qui n'étaient pas à jour en ligne
-window.addEventListener("online", () => { if(demarre) rattrapageEnLigne().catch(console.error); });
+window.addEventListener("online", () => {
+  if(!demarre) return;
+  majCodeEquipe().catch(() => {}).then(() => rattrapageEnLigne()).catch(console.error);
+});
 
 // Glissement gauche/droite en mode focus
 let tX = null;
